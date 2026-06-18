@@ -1,0 +1,18 @@
+---
+deployment:
+  tasks:
+    # IMPORTANT:
+    # Change this path to your subdomain Document Root in cPanel.
+    # Example: /home3/zzflgmfd/excel.bcsrp
+    - export DEPLOYPATH=/home2/CPANEL_USERNAME/YOUR_SUBDOMAIN_DOCUMENT_ROOT/
+    - /bin/mkdir -p $DEPLOYPATH
+    - /bin/cp -R app $DEPLOYPATH
+    - /bin/cp -R assets $DEPLOYPATH
+    - /bin/cp -R storage $DEPLOYPATH
+    - /bin/cp -R sample_import $DEPLOYPATH
+    - /bin/cp .htaccess $DEPLOYPATH
+    - /bin/cp index.php $DEPLOYPATH
+    - /bin/cp install.php $DEPLOYPATH
+    - /bin/cp cron.php $DEPLOYPATH
+    - /bin/cp README_FA.md $DEPLOYPATH
+    - /bin/cp INSTALL_CPanel_FA.md $DEPLOYPATH
