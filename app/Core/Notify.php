@@ -75,21 +75,33 @@ class Notify
         $today = date('Y-m-d');
         $emailTo = setting('notifications_email_to','');
         $smsTo = setting('notifications_sms_to','');
-        $sql = "SELECT t.*, c.name AS company_name FROM tasks t LEFT JOIN companies c ON c.id=t.company_id WHERE t.status NOT IN ('انجام شده','بسته شده') AND t.due_date IS NOT NULL AND t.due_date <= DATE_ADD(?, INTERVAL t.reminder_days DAY) ORDER BY t.due_date ASC LIMIT 100";
-        $st = pdo()->prepare($sql); $st->execute([$today]);
-        $sent = ['email'=>0,'sms'=>0,'tasks'=>0,'errors'=>[]];
-        foreach ($st->fetchAll() as $task) {
-            $sent['tasks']++;
-            $status = due_status($task['due_date'],$task['status']);
-            $msg = "یادآوری کار حسابداری\nشرکت: {$task['company_name']}\nکار: {$task['title']}\nسررسید: ".Jalali::fromGregorian($task['due_date'])."\nوضعیت: {$status}";
-            foreach (['email'=>$emailTo,'sms'=>$smsTo] as $channel=>$rec) {
-                if (!$rec) continue;
-                $chk = pdo()->prepare("SELECT COUNT(*) FROM notification_logs WHERE task_id=? AND channel=? AND DATE(created_at)=CURDATE()");
-                $chk->execute([$task['id'],$channel]); if ($chk->fetchColumn() > 0) continue;
-                $res = $channel === 'email' ? self::sendEmail($rec, 'یادآوری سررسید حسابداری', $msg) : self::sendSms($rec, $msg);
-                $lg = pdo()->prepare("INSERT INTO notification_logs (task_id,channel,recipient,message,status,response,created_at) VALUES (?,?,?,?,?,?,NOW())");
-                $lg->execute([$task['id'],$channel,$rec,$msg,$res['ok']?'sent':'failed',$res['response']]);
-                if ($res['ok']) $sent[$channel]++; else $sent['errors'][] = $channel.': '.$res['response'];
+        $sent = ['email'=>0,'sms'=>0,'items'=>0,'errors'=>[]];
+        $queries = [];
+        $queries[] = [
+            'sql' => "SELECT 'برنامه ماهانه' source, m.id, c.name company_name, m.work_type title, m.legal_deadline due_date, m.status FROM monthly_plans m LEFT JOIN companies c ON c.id=m.company_id WHERE m.status NOT IN ('انجام شده','بسته شده','لغو شده') AND m.legal_deadline IS NOT NULL AND m.legal_deadline <= DATE_ADD(?, INTERVAL 7 DAY) ORDER BY m.legal_deadline ASC LIMIT 120",
+            'params' => [$today]
+        ];
+        $queries[] = [
+            'sql' => "SELECT CONCAT('ماژول ', module_key) source, r.id, c.name company_name, r.title, r.due_date, r.status FROM module_records r LEFT JOIN companies c ON c.id=r.company_id WHERE r.status NOT IN ('انجام شده','بسته شده','لغو شده') AND r.due_date IS NOT NULL AND r.due_date <= DATE_ADD(?, INTERVAL 7 DAY) ORDER BY r.due_date ASC LIMIT 120",
+            'params' => [$today]
+        ];
+        foreach ($queries as $query) {
+            $st = pdo()->prepare($query['sql']); $st->execute($query['params']);
+            foreach ($st->fetchAll() as $item) {
+                $sent['items']++;
+                $status = due_status($item['due_date'],$item['status']);
+                $msg = "یادآوری سررسید حسابداری\nبخش: {$item['source']}\nشرکت: {$item['company_name']}\nکار: {$item['title']}\nسررسید: ".Jalali::fromGregorian($item['due_date'])."\nوضعیت: {$status}";
+                foreach (['email'=>$emailTo,'sms'=>$smsTo] as $channel=>$rec) {
+                    if (!$rec) continue;
+                    $fingerprint = sha1($item['source'].'-'.$item['id'].'-'.$channel.'-'.date('Y-m-d'));
+                    $chk = pdo()->prepare("SELECT COUNT(*) FROM notification_logs WHERE response LIKE ? AND channel=? AND DATE(created_at)=CURDATE()");
+                    $chk->execute(['%'.$fingerprint.'%',$channel]); if ($chk->fetchColumn() > 0) continue;
+                    $res = $channel === 'email' ? self::sendEmail($rec, 'یادآوری سررسید حسابداری', $msg) : self::sendSms($rec, $msg);
+                    $response = $res['response']."\nfingerprint:".$fingerprint;
+                    $lg = pdo()->prepare("INSERT INTO notification_logs (task_id,channel,recipient,message,status,response,created_at) VALUES (NULL,?,?,?,?,?,NOW())");
+                    $lg->execute([$channel,$rec,$msg,$res['ok']?'sent':'failed',$response]);
+                    if ($res['ok']) $sent[$channel]++; else $sent['errors'][] = $channel.': '.$res['response'];
+                }
             }
         }
         return $sent;
