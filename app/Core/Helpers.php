@@ -68,5 +68,8 @@ function normalize_phone_list(string $s): array
 }
 function table_exists(PDO $pdo, string $table): bool
 {
-    $st = $pdo->prepare("SHOW TABLES LIKE ?"); $st->execute([$table]); return (bool)$st->fetchColumn();
+    if (!preg_match('/^[A-Za-z0-9_]+$/', $table)) return false;
+    $st = $pdo->prepare("SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? LIMIT 1");
+    $st->execute([$table]);
+    return (bool)$st->fetchColumn();
 }

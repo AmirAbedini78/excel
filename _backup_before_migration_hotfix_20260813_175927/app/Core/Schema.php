@@ -179,30 +179,6 @@ class Schema
             created_at DATETIME NULL, updated_at DATETIME NULL,
             FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE SET NULL
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
-        $pdo->exec("CREATE TABLE IF NOT EXISTS portal_definitions (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            portal_key VARCHAR(80) NOT NULL UNIQUE,
-            title VARCHAR(150) NOT NULL,
-            url VARCHAR(500) NOT NULL,
-            sort_order INT NOT NULL DEFAULT 100,
-            active TINYINT(1) NOT NULL DEFAULT 1,
-            created_at DATETIME NULL, updated_at DATETIME NULL,
-            INDEX idx_portal_order (active,sort_order)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
-
-        $pdo->exec("CREATE TABLE IF NOT EXISTS portal_credentials (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            company_id INT NOT NULL,
-            portal_key VARCHAR(80) NOT NULL,
-            username VARCHAR(255) NULL,
-            password_enc MEDIUMTEXT NULL,
-            notes TEXT NULL,
-            created_at DATETIME NULL, updated_at DATETIME NULL,
-            UNIQUE KEY uniq_company_portal (company_id,portal_key),
-            INDEX idx_portal_company (portal_key,company_id),
-            FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
-
         $pdo->exec("CREATE TABLE IF NOT EXISTS error_notes (
             id INT AUTO_INCREMENT PRIMARY KEY,
             company_id INT NULL, happened_at DATE NULL, process VARCHAR(150) NULL, risk TEXT NULL, root_cause TEXT NULL,
@@ -244,18 +220,12 @@ class Schema
 
         self::seedSettings($pdo);
         self::normalizeOldCompanies($pdo);
-        self::seedPortalDefinitions($pdo);
-        self::migrateLegacySystems($pdo);
         self::seedV2($pdo);
     }
 
     private static function addColumn(PDO $pdo, string $table, string $column, string $definition): void
     {
-        if (!preg_match('/^[A-Za-z0-9_]+$/', $table) || !preg_match('/^[A-Za-z0-9_]+$/', $column)) {
-            throw new InvalidArgumentException('Invalid schema identifier');
-        }
-        $st = $pdo->prepare("SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND COLUMN_NAME=? LIMIT 1");
-        $st->execute([$table,$column]);
+        $st = $pdo->prepare("SHOW COLUMNS FROM `$table` LIKE ?"); $st->execute([$column]);
         if (!$st->fetchColumn()) $pdo->exec("ALTER TABLE `$table` ADD COLUMN `$column` $definition");
     }
 
@@ -270,14 +240,12 @@ class Schema
     private static function seedSettings(PDO $pdo): void
     {
         $defaults = [
-            'schema_version'=>'3.0.0', 'smtp_host'=>'smtp.gmail.com','smtp_port'=>'587','smtp_encryption'=>'tls','mail_from_name'=>'Accounting Manager',
+            'schema_version'=>'2.0.0', 'smtp_host'=>'smtp.gmail.com','smtp_port'=>'587','smtp_encryption'=>'tls','mail_from_name'=>'Accounting Manager',
             'ghasedak_line_number'=>'','notifications_email_to'=>'','notifications_sms_to'=>'','allow_google_signup'=>'1',
             'cron_secret'=>bin2hex(random_bytes(16)), 'edge_service_url'=>'', 'edge_service_token'=>'', 'cache_ttl_seconds'=>'30', 'api_enabled'=>'1'
         ];
         $st=$pdo->prepare("INSERT INTO settings (`key`,`value`,`encrypted`,`updated_at`) VALUES (?,?,0,NOW()) ON DUPLICATE KEY UPDATE `value`=`value`");
         foreach ($defaults as $k=>$v) $st->execute([$k,$v]);
-        // Schema version is controlled by the migration itself; unlike user settings it must advance on upgrade.
-        $pdo->prepare("INSERT INTO settings (`key`,`value`,`encrypted`,`updated_at`) VALUES ('schema_version','3.0.0',0,NOW()) ON DUPLICATE KEY UPDATE `value`='3.0.0',updated_at=NOW()")->execute();
         $st=$pdo->prepare("INSERT INTO remote_services (service_key,title,base_url,api_key,enabled,notes,updated_at) VALUES (?,?,?,?,0,?,NOW()) ON DUPLICATE KEY UPDATE title=VALUES(title)");
         $st->execute(['hermes','Hermes / RAG / AI Agent','','','اتصال آینده به هرمس، RAG و عامل هوش مصنوعی']);
         $st->execute(['edge_worker','سرویس جانبی روی سیستم/سرور دیگر','','','برای کارهای سنگین، کش خارجی یا پردازش‌های آینده']);
@@ -288,42 +256,6 @@ class Schema
         try {
             $pdo->exec("UPDATE companies SET company_type = COALESCE(NULLIF(company_type,''), NULLIF(type,'')), ceo_name = COALESCE(NULLIF(ceo_name,''), NULLIF(manager_name,''))");
         } catch (Throwable $e) {}
-    }
-
-    private static function seedPortalDefinitions(PDO $pdo): void
-    {
-        $rows = [
-            ['my_tax','سامانه مالیاتی','https://my.tax.gov.ir',10],
-            ['tamin','تامین اجتماعی','https://es.tamin.ir',20],
-            ['ntsw','سامانه جامع تجارت','https://www.ntsw.ir',30],
-            ['epl','گمرک EPL','https://epl.irica.ir',40],
-        ];
-        $st=$pdo->prepare("INSERT INTO portal_definitions (portal_key,title,url,sort_order,active,created_at,updated_at) VALUES (?,?,?,?,1,NOW(),NOW()) ON DUPLICATE KEY UPDATE title=VALUES(title),url=VALUES(url),sort_order=VALUES(sort_order),active=1,updated_at=NOW()");
-        foreach($rows as $r) $st->execute($r);
-    }
-
-    private static function migrateLegacySystems(PDO $pdo): void
-    {
-        try {
-            $st=$pdo->query("SELECT id,company_id,service_name,url,username,secret_note FROM systems");
-            $rows=$st->fetchAll(PDO::FETCH_ASSOC);
-            if(!$rows) return;
-            $defs=$pdo->query("SELECT portal_key,url FROM portal_definitions WHERE active=1")->fetchAll(PDO::FETCH_ASSOC);
-            $up=$pdo->prepare("INSERT INTO portal_credentials (company_id,portal_key,username,password_enc,created_at,updated_at) VALUES (?,?,?,?,NOW(),NOW()) ON DUPLICATE KEY UPDATE username=COALESCE(NULLIF(VALUES(username),''),username),password_enc=COALESCE(NULLIF(VALUES(password_enc),''),password_enc),updated_at=NOW()");
-            foreach($rows as $r){
-                if(empty($r['company_id'])) continue;
-                $hay=mb_strtolower(trim(($r['url']??'').' '.($r['service_name']??'')));
-                $key=null;
-                foreach($defs as $d){
-                    $host=parse_url($d['url'],PHP_URL_HOST) ?: $d['url'];
-                    if($host && str_contains($hay,mb_strtolower($host))){$key=$d['portal_key'];break;}
-                }
-                if(!$key) continue;
-                $pw=trim((string)($r['secret_note']??''));
-                $stored=$pw!=='' ? encrypt_value($pw) : '';
-                $up->execute([(int)$r['company_id'],$key,trim((string)($r['username']??'')),$stored]);
-            }
-        } catch(Throwable $e) {}
     }
 
     private static function seedV2(PDO $pdo): void
@@ -342,6 +274,7 @@ class Schema
         }
         self::seedMonthlyPlans($pdo);
         self::seedDailyPlans($pdo);
+        self::seedModuleRecords($pdo);
         self::seedCustomFields($pdo);
     }
 
