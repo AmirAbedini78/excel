@@ -117,6 +117,24 @@ function status_select_inline($selected): string {
 function row_actions(string $entity, int $id): string {
     return '<div class="row-actions"><button type="button" class="btn icon" data-edit-row>ویرایش</button><button type="button" class="btn icon danger" data-delete data-entity="'.h($entity).'" data-id="'.$id.'">حذف</button></div>';
 }
+function table_preferences_json(string $tableKey): string
+{
+    if(!Auth::check()) return '{}';
+    try{
+        $r=one("SELECT prefs_json FROM user_table_preferences WHERE user_id=? AND table_key=? LIMIT 1",[(int)Auth::user()['id'],$tableKey]);
+        $raw=(string)($r['prefs_json']??'{}');
+        $decoded=json_decode($raw,true);
+        return is_array($decoded) ? json_encode($decoded,JSON_UNESCAPED_UNICODE) : '{}';
+    }catch(Throwable $e){ return '{}'; }
+}
+function smart_table_attrs(string $tableKey): string
+{
+    return ' data-table-key="'.h($tableKey).'" data-table-prefs="'.h(table_preferences_json($tableKey)).'"';
+}
+function list_th(string $key, string $label, string $class=''): string
+{
+    return '<th data-col-key="'.h($key).'"'.($class!==''?' class="'.h($class).'"':'').'>'.h($label).'</th>';
+}
 
 $page = $_GET['page'] ?? 'dashboard';
 
@@ -179,9 +197,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($action === 'delete_system_credentials') handle_delete_system_credentials();
         if ($action === 'save_custom_field') handle_save_custom_field();
         if ($action === 'save_settings') handle_save_settings();
+        if ($action === 'save_table_preferences') handle_save_table_preferences();
+        if ($action === 'reset_table_preferences') handle_reset_table_preferences();
         if ($action === 'run_migration') { Schema::migrate(pdo()); flash('مایگریشن دیتابیس با موفقیت اجرا شد.'); redirect('index.php?page=settings'); }
     } catch (Throwable $e) {
-        if (in_array($action,['inline_update','delete_record','save_system_credentials','delete_system_credentials'],true)) json_out(['ok'=>false,'error'=>$e->getMessage()]);
+        if (in_array($action,['inline_update','delete_record','save_system_credentials','delete_system_credentials','save_table_preferences','reset_table_preferences'],true)) json_out(['ok'=>false,'error'=>$e->getMessage()]);
         flash($e->getMessage(),'danger'); redirect($_SERVER['HTTP_REFERER'] ?? 'index.php');
     }
 }
@@ -322,6 +342,39 @@ function handle_save_custom_field(): void
         ->execute([$entity,$key,$label,trim($_POST['field_type']??'text'),trim($_POST['options']??''),(int)($_POST['sort_order']??100)]);
     flash('فیلد اضافی ذخیره شد.'); redirect('index.php?page=custom_fields');
 }
+function handle_save_table_preferences(): never
+{
+    $key=trim((string)($_POST['table_key']??''));
+    if(!preg_match('/^[a-zA-Z0-9_.:-]{1,120}$/',$key)) throw new RuntimeException('کلید لیست نامعتبر است.');
+    $raw=(string)($_POST['prefs']??'{}');
+    if(strlen($raw)>120000) throw new RuntimeException('تنظیمات لیست بیش از حد بزرگ است.');
+    $prefs=json_decode($raw,true);
+    if(!is_array($prefs)) throw new RuntimeException('ساختار تنظیمات لیست معتبر نیست.');
+
+    $clean=['order'=>[],'hidden'=>[],'widths'=>[]];
+    foreach(($prefs['order']??[]) as $v) if(is_string($v) && strlen($v)<=160) $clean['order'][]=$v;
+    foreach(($prefs['hidden']??[]) as $v) if(is_string($v) && strlen($v)<=160) $clean['hidden'][]=$v;
+    foreach(($prefs['widths']??[]) as $k=>$v) {
+        if(!is_string($k) || strlen($k)>160) continue;
+        $w=(int)$v;
+        if($w>=56 && $w<=900) $clean['widths'][$k]=$w;
+    }
+    $clean['order']=array_values(array_unique($clean['order']));
+    $clean['hidden']=array_values(array_unique($clean['hidden']));
+    $json=json_encode($clean,JSON_UNESCAPED_UNICODE);
+    $uid=(int)Auth::user()['id'];
+    pdo()->prepare("INSERT INTO user_table_preferences (user_id,table_key,prefs_json,updated_at) VALUES (?,?,?,NOW()) ON DUPLICATE KEY UPDATE prefs_json=VALUES(prefs_json),updated_at=NOW()")
+        ->execute([$uid,$key,$json]);
+    json_out(['ok'=>true,'prefs'=>$clean]);
+}
+function handle_reset_table_preferences(): never
+{
+    $key=trim((string)($_POST['table_key']??''));
+    if(!preg_match('/^[a-zA-Z0-9_.:-]{1,120}$/',$key)) throw new RuntimeException('کلید لیست نامعتبر است.');
+    pdo()->prepare("DELETE FROM user_table_preferences WHERE user_id=? AND table_key=?")->execute([(int)Auth::user()['id'],$key]);
+    json_out(['ok'=>true]);
+}
+
 function handle_save_settings(): void
 {
     $plain=['notifications_email_to','notifications_sms_to','ghasedak_line_number','google_client_id','google_redirect_uri','allow_google_signup','smtp_host','smtp_port','smtp_encryption','smtp_username','mail_from_name','edge_service_url','cache_ttl_seconds','api_enabled'];
@@ -348,7 +401,7 @@ function render_header(string $title, string $subtitle=''): void
     ?><!doctype html><html lang="fa" dir="rtl"><head>
     <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
     <title><?=h($title)?> - Accounting CRM</title>
-    <link rel="stylesheet" href="assets/style.css?v=3.0">
+    <link rel="stylesheet" href="assets/style.css?v=3.1">
     </head><body><div class="app">
     <aside class="sidebar compact"><div class="brand">Accounting CRM<span>سامانه سبک حسابداران</span></div><nav>
     <?php foreach($nav as $k=>$v): ?><a class="<?=($_GET['page']??'dashboard')===$k?'active':''?>" href="index.php?page=<?=$k?>"><?=h($v)?></a><?php endforeach; ?>
@@ -358,7 +411,7 @@ function render_header(string $title, string $subtitle=''): void
     <form method="post" class="inline-form"><?=csrf_field()?><input type="hidden" name="action" value="logout"><button class="btn tiny" type="submit">خروج</button></form></div></header>
     <?php foreach(flashes() as $f): ?><div class="alert <?=h($f['type'])?>"><?=h($f['msg'])?></div><?php endforeach; ?><?php
 }
-function render_footer(): void { ?></main></div><script>window.CSRF='<?=h(csrf_token())?>';window.JALALI_TODAY='<?=h(Jalali::today())?>';</script><script src="assets/app.js?v=3.0"></script></body></html><?php }
+function render_footer(): void { ?></main></div><script>window.CSRF='<?=h(csrf_token())?>';window.JALALI_TODAY='<?=h(Jalali::today())?>';</script><script src="assets/app.js?v=3.1"></script></body></html><?php }
 
 if ($page === 'login') { render_login(); exit; }
 Auth::require();
@@ -375,13 +428,13 @@ else render_calendar();
 
 function render_login(): void
 {
-    ?><!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ورود</title><link rel="stylesheet" href="assets/style.css?v=3.0"></head>
+    ?><!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ورود</title><link rel="stylesheet" href="assets/style.css?v=3.1"></head>
     <body class="login-page"><main class="login-card"><h1>ورود به سامانه حسابداران</h1><p>تقویم کاری، شرکت‌ها، سامانه‌ها و برنامه‌های حسابداری</p>
     <?php foreach(flashes() as $f): ?><div class="alert <?=h($f['type'])?>"><?=h($f['msg'])?></div><?php endforeach; ?>
     <form method="post" class="grid-form autosave" data-form-key="login"><?=csrf_field()?><input type="hidden" name="action" value="login">
     <label>ایمیل<input type="email" name="email" required></label><label>رمز عبور<input type="password" name="password" required></label>
     <button class="btn primary" type="submit">ورود</button><a class="btn google" href="index.php?page=google_start">ورود یا ثبت‌نام با گوگل</a></form></main>
-    <script src="assets/app.js?v=3.0"></script></body></html><?php
+    <script src="assets/app.js?v=3.1"></script></body></html><?php
 }
 function render_calendar(): void
 {
@@ -476,9 +529,9 @@ function render_companies(): void
     if($v=trim($_GET['software']??'')){ $where[]="software LIKE ?";$params[]="%$v%"; }
     $rows=q("SELECT * FROM companies WHERE ".implode(' AND ',$where)." ORDER BY name",$params); $fields=custom_fields('companies');
 
-    echo '<section class="card table-card"><div class="section-title"><h2>لیست شرکت‌ها</h2><span class="muted">ویرایش ردیفی کنترل‌شده</span></div><div class="table-wrap"><table class="data-table compact-table companies-table" data-entity="companies"><thead><tr>
-    <th>عملیات</th><th>نام شرکت</th><th>نوع شرکت</th><th>شخصیت</th><th>شناسه ملی</th><th>کد اقتصادی</th><th>شماره ثبت</th><th>آدرس</th><th>کدپستی</th><th>شماره تلفن</th><th>مدیرعامل</th><th>کدملی مدیرعامل</th><th>شماره تماس مدیرعامل</th><th>نرم‌افزار</th>';
-    foreach($fields as $f) echo '<th>'.h($f['label']).'</th>';
+    echo '<section class="card table-card"><div class="section-title"><h2>لیست شرکت‌ها</h2><span class="muted">ویرایش ردیفی کنترل‌شده</span></div><div class="table-wrap"><table class="data-table compact-table companies-table smart-table" data-entity="companies"'.smart_table_attrs('companies').'><thead><tr>
+    <th data-col-key="actions">عملیات</th><th data-col-key="name">نام شرکت</th><th data-col-key="company_type">نوع شرکت</th><th data-col-key="legal_personality">شخصیت</th><th data-col-key="national_id">شناسه ملی</th><th data-col-key="economic_code">کد اقتصادی</th><th data-col-key="registration_number">شماره ثبت</th><th data-col-key="address">آدرس</th><th data-col-key="postal_code">کدپستی</th><th data-col-key="phone">شماره تلفن</th><th data-col-key="ceo_name">مدیرعامل</th><th data-col-key="ceo_national_id">کدملی مدیرعامل</th><th data-col-key="ceo_mobile">شماره تماس مدیرعامل</th><th data-col-key="software">نرم‌افزار</th>';
+    foreach($fields as $f) echo '<th data-col-key="extra.'.h($f['field_key']).'">'.h($f['label']).'</th>';
     echo '</tr></thead><tbody>';
     foreach($rows as $r){
         $extra=extra_decode($r['extra_json']??'');
@@ -509,9 +562,12 @@ function render_systems(): void
     $portals=portal_definitions();
 
     echo '<form class="filters compact" method="get"><input type="hidden" name="page" value="systems"><label>جستجوی شرکت<input name="q" value="'.h($qv).'"></label><button class="btn primary tiny">فیلتر</button><a class="btn tiny" href="index.php?page=systems">پاک کردن</a></form>';
-    echo '<section class="card table-card"><div class="section-title"><h2>دسترسی سامانه‌ها</h2><span class="muted">برای تغییر، ابتدا «ویرایش» را بزنید. آیکن چشم فقط نمایش رمز را تغییر می‌دهد.</span></div><div class="table-wrap"><table class="systems-table"><thead><tr><th rowspan="2">عملیات</th><th rowspan="2">نام شرکت</th>';
-    foreach($portals as $p) echo '<th colspan="2"><a href="'.h($p['url']).'" target="_blank" rel="noopener">'.h($p['url']).'</a></th>';
-    echo '</tr><tr>'; foreach($portals as $p) echo '<th>نام کاربری</th><th>کلمه عبور</th>'; echo '</tr></thead><tbody>';
+    echo '<section class="card table-card"><div class="section-title"><h2>دسترسی سامانه‌ها</h2><span class="muted">برای تغییر، ابتدا «ویرایش» را بزنید. تنظیم ستون‌ها از آیکن چرخ‌دنده در دسترس است.</span></div><div class="table-wrap"><table class="systems-table smart-table"'.smart_table_attrs('systems').'><thead><tr><th data-col-key="actions">عملیات</th><th data-col-key="company">نام شرکت</th>';
+    foreach($portals as $p) {
+        echo '<th data-col-key="portal.'.h($p['portal_key']).'.username"><span class="portal-head"><a href="'.h($p['url']).'" target="_blank" rel="noopener">'.h($p['url']).'</a><small>نام کاربری</small></span></th>';
+        echo '<th data-col-key="portal.'.h($p['portal_key']).'.password"><span class="portal-head"><a href="'.h($p['url']).'" target="_blank" rel="noopener">'.h($p['url']).'</a><small>کلمه عبور</small></span></th>';
+    }
+    echo '</tr></thead><tbody>';
 
     $credRows=q("SELECT * FROM portal_credentials"); $creds=[];
     foreach($credRows as $cr) $creds[(int)$cr['company_id']][$cr['portal_key']]=$cr;
@@ -549,8 +605,8 @@ function render_daily(): void
     $rows=q("SELECT d.*,c.name company_name FROM daily_plans d LEFT JOIN companies c ON c.id=d.company_id WHERE ".implode(' AND ',$where)." ORDER BY plan_date DESC,id DESC LIMIT 500",$params);
     $fields=custom_fields('daily_plans');
 
-    echo '<section class="card table-card"><div class="table-wrap"><table class="data-table compact-table" data-entity="daily_plans"><thead><tr><th>عملیات</th><th>تاریخ</th><th>روز</th><th>شرکت</th><th>شرح کار</th><th>موقعیت</th><th>توضیحات</th>';
-    foreach($fields as $f) echo '<th>'.h($f['label']).'</th>'; echo '</tr></thead><tbody>';
+    echo '<section class="card table-card"><div class="table-wrap"><table class="data-table compact-table smart-table" data-entity="daily_plans"'.smart_table_attrs('daily_plans').'><thead><tr><th data-col-key="actions">عملیات</th><th data-col-key="plan_date">تاریخ</th><th data-col-key="day_name">روز</th><th data-col-key="company_id">شرکت</th><th data-col-key="work_description">شرح کار</th><th data-col-key="location">موقعیت</th><th data-col-key="notes">توضیحات</th>';
+    foreach($fields as $f) echo '<th data-col-key="extra.'.h($f['field_key']).'">'.h($f['label']).'</th>'; echo '</tr></thead><tbody>';
     foreach($rows as $r){
         $extra=extra_decode($r['extra_json']??'');
         echo '<tr data-id="'.(int)$r['id'].'"><td>'.row_actions('daily_plans',$r['id']).'</td>';
@@ -592,8 +648,8 @@ function render_monthly(): void
     $rows=q("SELECT m.*,c.name company_name FROM monthly_plans m LEFT JOIN companies c ON c.id=m.company_id WHERE ".implode(' AND ',$where)." ORDER BY legal_deadline IS NULL,legal_deadline ASC,id DESC LIMIT 700",$params);
     $fields=custom_fields('monthly_plans');
 
-    echo '<section class="card table-card"><div class="table-wrap"><table class="data-table compact-table" data-entity="monthly_plans"><thead><tr><th>عملیات</th><th>نام شرکت</th><th>ماه</th><th>فصل</th><th>نوع کار</th><th>مهلت قانونی</th><th>وضعیت</th><th>روز انجام</th><th>تاریخ انجام</th>';
-    foreach($fields as $f) echo '<th>'.h($f['label']).'</th>'; echo '</tr></thead><tbody>';
+    echo '<section class="card table-card"><div class="table-wrap"><table class="data-table compact-table smart-table" data-entity="monthly_plans"'.smart_table_attrs('monthly_plans').'><thead><tr><th data-col-key="actions">عملیات</th><th data-col-key="company_id">نام شرکت</th><th data-col-key="month_name">ماه</th><th data-col-key="season">فصل</th><th data-col-key="work_type">نوع کار</th><th data-col-key="legal_deadline">مهلت قانونی</th><th data-col-key="status">وضعیت</th><th data-col-key="work_day">روز انجام</th><th data-col-key="completed_date">تاریخ انجام</th>';
+    foreach($fields as $f) echo '<th data-col-key="extra.'.h($f['field_key']).'">'.h($f['label']).'</th>'; echo '</tr></thead><tbody>';
     foreach($rows as $r){
         $extra=extra_decode($r['extra_json']??'');
         echo '<tr data-id="'.(int)$r['id'].'"><td>'.row_actions('monthly_plans',$r['id']).'</td><td>'.company_select_inline($r['company_id']).'</td>';
@@ -620,7 +676,7 @@ function render_custom_fields(): void
     <label>گزینه‌ها<input name="options" placeholder="برای لیست با ، جدا شود"></label><label>ترتیب<input name="sort_order" value="100"></label><button class="btn primary">افزودن فیلد</button></form></details></section>';
 
     $rows=q("SELECT * FROM custom_fields WHERE active=1 AND entity_key IN ('companies','daily_plans','monthly_plans') ORDER BY entity_key,sort_order,id");
-    echo '<section class="card table-card"><div class="table-wrap"><table class="data-table compact-table" data-entity="custom_fields"><thead><tr><th>عملیات</th><th>بخش</th><th>کلید</th><th>عنوان</th><th>نوع</th><th>گزینه‌ها</th><th>ترتیب</th></tr></thead><tbody>';
+    echo '<section class="card table-card"><div class="table-wrap"><table class="data-table compact-table smart-table" data-entity="custom_fields"'.smart_table_attrs('custom_fields').'><thead><tr><th data-col-key="actions">عملیات</th><th data-col-key="entity_key">بخش</th><th data-col-key="field_key">کلید</th><th data-col-key="label">عنوان</th><th data-col-key="field_type">نوع</th><th data-col-key="options">گزینه‌ها</th><th data-col-key="sort_order">ترتیب</th></tr></thead><tbody>';
     foreach($rows as $r){
         echo '<tr data-id="'.(int)$r['id'].'"><td>'.row_actions('custom_fields',$r['id']).'</td>';
         echo '<td>'.select_inline('entity_key',$r['entity_key'],array_keys($entities)).'</td>';
@@ -638,17 +694,17 @@ function render_kanban(): void
     echo quick_filters(['company_id'=>['label'=>'شرکت','type'=>'company'],'work_type'=>['label'=>'نوع کار','type'=>'work_type']]);
     $company=$_GET['company_id']??''; $type=$_GET['work_type']??'';
     $statuses=['باز','در حال انجام','منتظر مدارک','معوق','انجام شده'];
-    echo '<section class="kanban">';
+    echo '<section class="kanban" data-kanban-board><div class="kanban-help">کارت‌ها را بگیرید و بین ستون‌ها جابه‌جا کنید؛ وضعیت بلافاصله در دیتابیس ذخیره می‌شود.</div>';
     foreach($statuses as $s){
         $params=[$s]; $where='m.status=?';
         if($company){$where.=' AND m.company_id=?';$params[]=$company;}
         if($type){$where.=' AND m.work_type=?';$params[]=$type;}
         $rows=q("SELECT m.*,c.name company_name FROM monthly_plans m LEFT JOIN companies c ON c.id=m.company_id WHERE $where ORDER BY m.legal_deadline IS NULL,m.legal_deadline LIMIT 80",$params);
-        echo '<div class="kanban-col"><h3>'.h($s).' <span>'.count($rows).'</span></h3>';
+        echo '<div class="kanban-col" data-kanban-status="'.h($s).'"><h3>'.h($s).' <span data-kanban-count>'.count($rows).'</span></h3><div class="kanban-dropzone">';
         foreach($rows as $r){
-            echo '<a class="kanban-card" href="index.php?page=monthly&company_id='.(int)$r['company_id'].'&status='.urlencode($r['status']).'"><b>'.h($r['work_type']).'</b><small>'.h($r['company_name']).' — '.h($r['month_name']).'</small><time>'.h(fa_date($r['legal_deadline'])).'</time></a>';
+            echo '<article class="kanban-card" draggable="true" data-kanban-id="'.(int)$r['id'].'" data-company-id="'.(int)$r['company_id'].'" tabindex="0"><b>'.h($r['work_type']).'</b><small>'.h($r['company_name']).' — '.h($r['month_name']).'</small><time>'.h(fa_date($r['legal_deadline'])).'</time><a class="kanban-open" href="index.php?page=monthly&company_id='.(int)$r['company_id'].'&status='.urlencode($r['status']).'">باز کردن</a></article>';
         }
-        echo '</div>';
+        echo '</div></div>';
     }
     echo '</section>'; render_footer();
 }

@@ -19,6 +19,17 @@ class Schema
             `key` VARCHAR(120) PRIMARY KEY, `value` MEDIUMTEXT NULL, encrypted TINYINT(1) NOT NULL DEFAULT 0, updated_at DATETIME NULL
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
+        $pdo->exec("CREATE TABLE IF NOT EXISTS user_table_preferences (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            user_id INT NOT NULL,
+            table_key VARCHAR(120) NOT NULL,
+            prefs_json MEDIUMTEXT NOT NULL,
+            updated_at DATETIME NULL,
+            UNIQUE KEY uniq_user_table_pref (user_id,table_key),
+            INDEX idx_table_pref_user (user_id),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
         $pdo->exec("CREATE TABLE IF NOT EXISTS companies (
             id INT AUTO_INCREMENT PRIMARY KEY,
             name VARCHAR(190) NOT NULL UNIQUE,
@@ -270,14 +281,14 @@ class Schema
     private static function seedSettings(PDO $pdo): void
     {
         $defaults = [
-            'schema_version'=>'3.0.0', 'smtp_host'=>'smtp.gmail.com','smtp_port'=>'587','smtp_encryption'=>'tls','mail_from_name'=>'Accounting Manager',
+            'schema_version'=>'3.1.0', 'smtp_host'=>'smtp.gmail.com','smtp_port'=>'587','smtp_encryption'=>'tls','mail_from_name'=>'Accounting Manager',
             'ghasedak_line_number'=>'','notifications_email_to'=>'','notifications_sms_to'=>'','allow_google_signup'=>'1',
             'cron_secret'=>bin2hex(random_bytes(16)), 'edge_service_url'=>'', 'edge_service_token'=>'', 'cache_ttl_seconds'=>'30', 'api_enabled'=>'1'
         ];
         $st=$pdo->prepare("INSERT INTO settings (`key`,`value`,`encrypted`,`updated_at`) VALUES (?,?,0,NOW()) ON DUPLICATE KEY UPDATE `value`=`value`");
         foreach ($defaults as $k=>$v) $st->execute([$k,$v]);
         // Schema version is controlled by the migration itself; unlike user settings it must advance on upgrade.
-        $pdo->prepare("INSERT INTO settings (`key`,`value`,`encrypted`,`updated_at`) VALUES ('schema_version','3.0.0',0,NOW()) ON DUPLICATE KEY UPDATE `value`='3.0.0',updated_at=NOW()")->execute();
+        $pdo->prepare("INSERT INTO settings (`key`,`value`,`encrypted`,`updated_at`) VALUES ('schema_version','3.1.0',0,NOW()) ON DUPLICATE KEY UPDATE `value`='3.1.0',updated_at=NOW()")->execute();
         $st=$pdo->prepare("INSERT INTO remote_services (service_key,title,base_url,api_key,enabled,notes,updated_at) VALUES (?,?,?,?,0,?,NOW()) ON DUPLICATE KEY UPDATE title=VALUES(title)");
         $st->execute(['hermes','Hermes / RAG / AI Agent','','','اتصال آینده به هرمس، RAG و عامل هوش مصنوعی']);
         $st->execute(['edge_worker','سرویس جانبی روی سیستم/سرور دیگر','','','برای کارهای سنگین، کش خارجی یا پردازش‌های آینده']);

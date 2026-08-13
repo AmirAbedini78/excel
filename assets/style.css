@@ -104,3 +104,57 @@ td{font-size:10.7px;background:#fff}tr:hover td{background:#fcfdff}
   .calendar-shell{overflow:auto}.calendar-grid{min-width:700px}.calendar-day{min-height:92px;padding:5px}
   .kanban{grid-template-columns:1fr}.table-wrap{overscroll-behavior-x:contain}
 }
+
+
+/* ===== Smart persistent data grids v3.1 ===== */
+.smart-table{table-layout:fixed;width:100%;min-width:760px}
+.smart-table th,.smart-table td{position:relative;box-sizing:border-box}
+.smart-table th.draggable-col{cursor:grab;user-select:none;padding-left:11px}
+.smart-table th.draggable-col:active{cursor:grabbing}
+.smart-table th.column-dragging{opacity:.45;background:#eef3fb}
+.smart-table th.column-drag-over{box-shadow:inset 2px 0 0 #64748b,inset -2px 0 0 #64748b}
+.smart-table.column-resizing,.smart-table.column-resizing *{cursor:col-resize!important;user-select:none!important}
+.smart-table .col-hidden{display:none!important}
+.col-resizer{position:absolute;z-index:5;left:-3px;top:0;width:7px;height:100%;cursor:col-resize;touch-action:none}
+.col-resizer:after{content:"";position:absolute;left:3px;top:24%;height:52%;width:1px;background:transparent}
+.smart-table th:hover .col-resizer:after,.smart-table.column-resizing .col-resizer:after{background:#c7cfdd}
+.list-toolbar{position:relative;display:flex;align-items:center;justify-content:flex-end;gap:6px;padding:5px 8px;border-bottom:1px solid var(--line);background:#fbfcfe}
+.list-toolbar-hint{margin-inline-end:auto;font-size:9px;color:var(--muted);transition:.2s}
+.list-toolbar.prefs-saved .list-toolbar-hint:after{content:" • ذخیره شد";color:#18885d}
+.table-gear{width:28px;height:26px;font-size:13px;padding:0}
+.table-settings-panel{position:absolute;z-index:1200;top:34px;left:8px;width:min(390px,calc(100vw - 34px));max-height:70vh;overflow:auto;background:#fff;border:1px solid #dce2eb;border-radius:10px;box-shadow:0 16px 42px rgba(15,23,42,.16);padding:8px;text-align:right}
+.table-settings-panel[hidden]{display:none}
+.table-settings-head{display:flex;align-items:center;gap:5px;padding-bottom:7px;border-bottom:1px solid var(--line);margin-bottom:6px}
+.table-settings-head strong{font-size:11px;margin-inline-end:auto}
+.column-config-list{display:grid;gap:3px}
+.column-config-item{display:grid;grid-template-columns:18px 18px minmax(110px,1fr) 72px;align-items:center;gap:5px;padding:5px 6px;border:1px solid transparent;border-radius:7px;background:#fafbfc;cursor:grab}
+.column-config-item:hover{border-color:#dce3ec;background:#fff}
+.column-config-item.dragging{opacity:.45}
+.column-config-item.drag-over-item{border-color:#93a9d2;background:#f4f7fc}
+.drag-handle{color:#8a94a5;font-size:12px;letter-spacing:-2px;cursor:grab}
+.column-config-label{font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.column-width-input{height:25px!important;padding:2px 5px!important;font-size:9.5px!important}
+.danger-soft{color:#b33a3a;background:#fff7f7;border-color:#f0d0d0}
+.portal-head{display:flex;flex-direction:column;gap:1px;line-height:1.15}
+.portal-head a{font-size:9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.portal-head small{font-size:8.5px;color:var(--muted);font-weight:500}
+
+/* ===== Kanban drag/drop v3.1 ===== */
+.kanban[data-kanban-board]{position:relative;padding-top:25px}
+.kanban-help{position:absolute;top:0;right:2px;left:2px;height:19px;font-size:9px;color:var(--muted);display:flex;align-items:center}
+.kanban-col{transition:border-color .12s,background .12s,box-shadow .12s}
+.kanban-col.drag-over{border-color:#8ca3ce;background:#f7f9fd;box-shadow:0 0 0 2px rgba(96,122,171,.08)}
+.kanban-dropzone{min-height:230px}
+.kanban-card{cursor:grab;position:relative;transition:transform .12s,opacity .12s,border-color .12s,box-shadow .12s}
+.kanban-card:active{cursor:grabbing}
+.kanban-card.dragging{opacity:.42;transform:rotate(-1deg)}
+.kanban-card.saving{opacity:.6}
+.kanban-card.saved{border-color:#8bcdb1;box-shadow:0 0 0 2px rgba(49,160,105,.08)}
+.kanban-open{display:inline-block;margin-top:5px;color:#526987;text-decoration:none;font-size:9px}
+.kanban-open:hover{text-decoration:underline}
+
+@media(max-width:700px){
+  .list-toolbar-hint{display:none}
+  .table-settings-panel{position:fixed;left:10px;right:10px;top:auto;bottom:10px;width:auto;max-height:72vh}
+  .column-config-item{grid-template-columns:18px 18px minmax(90px,1fr) 66px}
+}
