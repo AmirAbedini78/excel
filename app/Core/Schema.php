@@ -225,10 +225,24 @@ class Schema
 
     private static function addColumn(PDO $pdo, string $table, string $column, string $definition): void
     {
-        $st = $pdo->prepare("SHOW COLUMNS FROM `$table` LIKE ?"); $st->execute([$column]);
-        if (!$st->fetchColumn()) $pdo->exec("ALTER TABLE `$table` ADD COLUMN `$column` $definition");
-    }
+        if (!preg_match('/^[A-Za-z0-9_]+$/', $table) || !preg_match('/^[A-Za-z0-9_]+$/', $column)) {
+            throw new InvalidArgumentException('Invalid schema identifier');
+        }
 
+        $st = $pdo->prepare(
+            "SELECT 1
+             FROM INFORMATION_SCHEMA.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE()
+               AND TABLE_NAME = ?
+               AND COLUMN_NAME = ?
+             LIMIT 1"
+        );
+        $st->execute([$table, $column]);
+
+        if (!$st->fetchColumn()) {
+            $pdo->exec("ALTER TABLE `$table` ADD COLUMN `$column` $definition");
+        }
+    }
     public static function createAdmin(PDO $pdo, string $name, string $email, string $password): void
     {
         $st = $pdo->prepare("INSERT INTO users (name,email,password_hash,role,status,created_at,updated_at) VALUES (?,?,?,?,?,NOW(),NOW()) ON DUPLICATE KEY UPDATE name=VALUES(name), password_hash=VALUES(password_hash), role='admin', status='active', updated_at=NOW()");
