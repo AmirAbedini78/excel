@@ -1,0 +1,28 @@
+/* Accounting CRM V3.2 */
+.v32-select-col{width:34px!important;min-width:34px!important;max-width:34px!important;text-align:center!important;position:sticky;right:0;z-index:3;background:var(--surface,#fff)}
+.v32-select-col input{width:15px;height:15px;margin:0}
+.v32-io-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-inline-start:auto}
+.v32-selected-count{font-size:11px;color:#64748b;min-width:58px}
+.v32-import-backdrop{display:flex!important;align-items:center;justify-content:center;padding:18px}
+.v32-import-modal{width:min(620px,96vw);background:#fff;border-radius:14px;border:1px solid #e5e7eb;box-shadow:0 24px 70px rgba(15,23,42,.18);padding:16px}
+.v32-import-note{font-size:11px;line-height:1.9;background:#f8fafc;border:1px solid #e5e7eb;border-radius:9px;padding:9px 11px;margin:10px 0}
+.v32-template-links{display:flex;gap:6px;align-items:end}
+.v32-event-actions{display:flex;gap:6px;margin-top:8px}
+.v32-quick-panel{border-top:1px solid #e5e7eb;padding:12px 14px;background:#fbfcfe}
+.v32-quick-buttons{display:flex;gap:6px;margin-bottom:8px}
+.v32-quick-form{display:grid;grid-template-columns:100px minmax(120px,1fr) minmax(160px,2fr) minmax(140px,2fr) auto;gap:6px;align-items:center}
+.v32-quick-form select,.v32-quick-form input{min-width:0;height:32px;font-size:12px;padding:5px 8px}
+.v32-quick-date{font-size:11px;color:#64748b;white-space:nowrap}
+.v32-focus-row{outline:2px solid #2563eb!important;outline-offset:-2px;animation:v32pulse 1s ease 2}
+@keyframes v32pulse{50%{background:#eff6ff}}
+.v32-kanban-bulk{display:flex;align-items:center;gap:8px;grid-column:1/-1;padding:6px 8px;background:#fff;border:1px solid #e5e7eb;border-radius:9px}
+.v32-kanban-select{position:absolute;top:7px;left:7px;width:15px;height:15px;z-index:2}
+.kanban-card{position:relative}
+@media(max-width:760px){
+  .v32-io-actions{width:100%;margin-top:6px}
+  .v32-quick-form{grid-template-columns:1fr 1fr}
+  .v32-quick-form .v32-quick-date,.v32-quick-form button{grid-column:1/-1}
+  .v32-import-modal{padding:12px}
+}
+
+.v32-calendar-bulk{display:flex;align-items:center;gap:8px;padding:6px 0 10px;border-bottom:1px solid #e5e7eb;margin-bottom:8px}.v32-modal-event{position:relative;padding-inline-start:30px}.v32-cal-select{position:absolute;left:8px;top:12px;width:15px;height:15px}

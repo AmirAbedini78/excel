@@ -9,6 +9,8 @@ deployment:
     - /bin/cp -R sample_import $DEPLOYPATH
     - /bin/cp .htaccess $DEPLOYPATH
     - /bin/cp index.php $DEPLOYPATH
+    - /bin/cp io.php $DEPLOYPATH
+    - /bin/cp v3_2_api.php $DEPLOYPATH
     - /bin/cp install.php $DEPLOYPATH
     - /bin/cp cron.php $DEPLOYPATH
     - /bin/cp api.php $DEPLOYPATH
