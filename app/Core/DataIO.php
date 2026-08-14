@@ -44,8 +44,8 @@ class AccountingDataIO
     {
         $name=trim($name);
         if($name==='') return null;
-        $st=pdo()->prepare("SELECT id FROM companies WHERE active=1 AND name=? LIMIT 1");
-        $st->execute([$name]);
+        $st=pdo()->prepare("SELECT id FROM companies WHERE workspace_id=? AND active=1 AND name=? LIMIT 1");
+        $st->execute([Tenant::id(),$name]);
         $id=$st->fetchColumn();
         return $id ? (int)$id : null;
     }
@@ -59,8 +59,8 @@ class AccountingDataIO
 
     private static function customFields(string $entity): array
     {
-        $st=pdo()->prepare("SELECT field_key,label FROM custom_fields WHERE entity_key=? AND active=1 ORDER BY sort_order,id");
-        $st->execute([$entity]);
+        $st=pdo()->prepare("SELECT field_key,label FROM custom_fields WHERE workspace_id=? AND entity_key=? AND active=1 ORDER BY sort_order,id");
+        $st->execute([Tenant::id(),$entity]);
         return $st->fetchAll();
     }
 
@@ -108,8 +108,8 @@ class AccountingDataIO
 
         if($entity==='companies'){
             [$extra,$params]=self::idsWhere($ids);
-            $st=pdo()->prepare("SELECT * FROM companies WHERE active=1 $extra ORDER BY name");
-            $st->execute($params);
+            $st=pdo()->prepare("SELECT * FROM companies WHERE workspace_id=? AND active=1 $extra ORDER BY name");
+            $st->execute([Tenant::id(),...$params]);
             $custom=self::customFields('companies');
             foreach($st->fetchAll() as $r){
                 $x=json_decode((string)($r['extra_json']??''),true); if(!is_array($x))$x=[];
@@ -123,8 +123,8 @@ class AccountingDataIO
             }
         } elseif($entity==='daily_plans'){
             [$extra,$params]=self::idsWhere($ids,'d.id');
-            $st=pdo()->prepare("SELECT d.*,c.name company_name FROM daily_plans d LEFT JOIN companies c ON c.id=d.company_id WHERE 1=1 $extra ORDER BY d.plan_date,d.id");
-            $st->execute($params);
+            $st=pdo()->prepare("SELECT d.*,c.name company_name FROM daily_plans d LEFT JOIN companies c ON c.id=d.company_id WHERE d.workspace_id=? $extra ORDER BY d.plan_date,d.id");
+            $st->execute([Tenant::id(),...$params]);
             $custom=self::customFields('daily_plans');
             foreach($st->fetchAll() as $r){
                 $x=json_decode((string)($r['extra_json']??''),true); if(!is_array($x))$x=[];
@@ -134,8 +134,8 @@ class AccountingDataIO
             }
         } elseif($entity==='monthly_plans'){
             [$extra,$params]=self::idsWhere($ids,'m.id');
-            $st=pdo()->prepare("SELECT m.*,c.name company_name FROM monthly_plans m LEFT JOIN companies c ON c.id=m.company_id WHERE 1=1 $extra ORDER BY m.legal_deadline,m.id");
-            $st->execute($params);
+            $st=pdo()->prepare("SELECT m.*,c.name company_name FROM monthly_plans m LEFT JOIN companies c ON c.id=m.company_id WHERE m.workspace_id=? $extra ORDER BY m.legal_deadline,m.id");
+            $st->execute([Tenant::id(),...$params]);
             $custom=self::customFields('monthly_plans');
             foreach($st->fetchAll() as $r){
                 $x=json_decode((string)($r['extra_json']??''),true); if(!is_array($x))$x=[];
@@ -148,16 +148,16 @@ class AccountingDataIO
             }
         } elseif($entity==='custom_fields'){
             [$extra,$params]=self::idsWhere($ids);
-            $st=pdo()->prepare("SELECT * FROM custom_fields WHERE active=1 $extra ORDER BY entity_key,sort_order,id");
-            $st->execute($params);
+            $st=pdo()->prepare("SELECT * FROM custom_fields WHERE workspace_id=? AND active=1 $extra ORDER BY entity_key,sort_order,id");
+            $st->execute([Tenant::id(),...$params]);
             foreach($st->fetchAll() as $r)$rows[]=[$r['entity_key'],$r['field_key'],$r['label'],$r['field_type'],$r['options'],$r['sort_order']];
         } elseif($entity==='portal_credentials'){
             [$extra,$params]=self::idsWhere($ids,'c.id');
-            $st=pdo()->prepare("SELECT c.id,c.name FROM companies c WHERE c.active=1 $extra ORDER BY c.name");
-            $st->execute($params);
+            $st=pdo()->prepare("SELECT c.id,c.name FROM companies c WHERE c.workspace_id=? AND c.active=1 $extra ORDER BY c.name");
+            $st->execute([Tenant::id(),...$params]);
             $companies=$st->fetchAll();
             $portals=self::portals();
-            $credRows=pdo()->query("SELECT * FROM portal_credentials")->fetchAll();
+            $stCred=pdo()->prepare("SELECT * FROM portal_credentials WHERE workspace_id=?");$stCred->execute([Tenant::id()]);$credRows=$stCred->fetchAll();
             $map=[]; foreach($credRows as $cr)$map[(int)$cr['company_id']][$cr['portal_key']]=$cr;
             foreach($companies as $c){
                 $row=[$c['name']];
@@ -288,7 +288,7 @@ class AccountingDataIO
     private static function importCompany(array $r,array $idx,array &$s): void
     {
         $name=self::value($r,$idx,['نام شرکت']); if($name==='')throw new RuntimeException('نام شرکت خالی است.');
-        $existing=pdo()->prepare("SELECT id,extra_json FROM companies WHERE name=? LIMIT 1");$existing->execute([$name]);$old=$existing->fetch();
+        $existing=pdo()->prepare("SELECT id,extra_json FROM companies WHERE workspace_id=? AND name=? LIMIT 1");$existing->execute([Tenant::id(),$name]);$old=$existing->fetch();
         $extra=$old?json_decode((string)($old['extra_json']??''),true):[];if(!is_array($extra))$extra=[];
         $extra=array_merge($extra,self::extrasFromRow('companies',$r,$idx));
         $data=[
@@ -299,10 +299,10 @@ class AccountingDataIO
             json_encode($extra,JSON_UNESCAPED_UNICODE)
         ];
         if($old){
-            pdo()->prepare("UPDATE companies SET company_type=?,legal_personality=?,national_id=?,economic_code=?,registration_number=?,address=?,postal_code=?,phone=?,ceo_name=?,ceo_national_id=?,ceo_mobile=?,software=?,extra_json=?,active=1,updated_at=NOW() WHERE id=?")->execute([...$data,(int)$old['id']]);
+            pdo()->prepare("UPDATE companies SET company_type=?,legal_personality=?,national_id=?,economic_code=?,registration_number=?,address=?,postal_code=?,phone=?,ceo_name=?,ceo_national_id=?,ceo_mobile=?,software=?,extra_json=?,active=1,updated_at=NOW() WHERE id=? AND workspace_id=?")->execute([...$data,(int)$old['id'],Tenant::id()]);
             $s['updated']++;
         }else{
-            pdo()->prepare("INSERT INTO companies (name,company_type,legal_personality,national_id,economic_code,registration_number,address,postal_code,phone,ceo_name,ceo_national_id,ceo_mobile,software,extra_json,active,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,NOW(),NOW())")->execute([$name,...$data]);
+            pdo()->prepare("INSERT INTO companies (workspace_id,name,company_type,legal_personality,national_id,economic_code,registration_number,address,postal_code,phone,ceo_name,ceo_national_id,ceo_mobile,software,extra_json,active,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,NOW(),NOW())")->execute([Tenant::id(),$name,...$data]);
             $s['inserted']++;
         }
     }
@@ -315,14 +315,14 @@ class AccountingDataIO
         $day=self::value($r,$idx,['روز']); if($day==='')$day=self::dayName($date);
         $notes=self::value($r,$idx,['توضیحات']);
         $extra=self::extrasFromRow('daily_plans',$r,$idx);
-        $st=pdo()->prepare("SELECT id,extra_json FROM daily_plans WHERE plan_date=? AND company_id <=> ? AND work_description=? LIMIT 1");$st->execute([$date,$cid,$desc]);$old=$st->fetch();
+        $st=pdo()->prepare("SELECT id,extra_json FROM daily_plans WHERE workspace_id=? AND plan_date=? AND company_id <=> ? AND work_description=? LIMIT 1");$st->execute([Tenant::id(),$date,$cid,$desc]);$old=$st->fetch();
         if($old){
             $oldExtra=json_decode((string)($old['extra_json']??''),true);if(!is_array($oldExtra))$oldExtra=[];
             $extra=array_merge($oldExtra,$extra);
-            pdo()->prepare("UPDATE daily_plans SET day_name=?,notes=?,extra_json=?,updated_at=NOW() WHERE id=?")->execute([$day,$notes,json_encode($extra,JSON_UNESCAPED_UNICODE),(int)$old['id']]);
+            pdo()->prepare("UPDATE daily_plans SET day_name=?,notes=?,extra_json=?,updated_at=NOW() WHERE id=? AND workspace_id=?")->execute([$day,$notes,json_encode($extra,JSON_UNESCAPED_UNICODE),(int)$old['id'],Tenant::id()]);
             $s['updated']++;
         }else{
-            pdo()->prepare("INSERT INTO daily_plans (plan_date,day_name,company_id,work_description,status,notes,extra_json,created_by,created_at,updated_at) VALUES (?,?,?,?,'باز',?,?,?,NOW(),NOW())")->execute([$date,$day,$cid,$desc,$notes,json_encode($extra,JSON_UNESCAPED_UNICODE),(int)Auth::user()['id']]);
+            pdo()->prepare("INSERT INTO daily_plans (workspace_id,plan_date,day_name,company_id,work_description,status,notes,extra_json,created_by,created_at,updated_at) VALUES (?,?,?,?,?,'باز',?,?,?,NOW(),NOW())")->execute([Tenant::id(),$date,$day,$cid,$desc,$notes,json_encode($extra,JSON_UNESCAPED_UNICODE),(int)Auth::user()['id']]);
             $s['inserted']++;
         }
     }
@@ -336,15 +336,15 @@ class AccountingDataIO
         $status=self::value($r,$idx,['وضعیت'],'باز')?:'باز';$workDay=self::value($r,$idx,['روز انجام']);
         $completed=self::parseDate(self::value($r,$idx,['تاریخ انجام']));$notes=self::value($r,$idx,['توضیحات']);
         $extra=self::extrasFromRow('monthly_plans',$r,$idx);
-        $st=pdo()->prepare("SELECT id,extra_json FROM monthly_plans WHERE company_id <=> ? AND jalali_year=? AND month_name=? AND work_type=? AND legal_deadline <=> ? LIMIT 1");
-        $st->execute([$cid,$year,$month,$work,$deadline]);$old=$st->fetch();
+        $st=pdo()->prepare("SELECT id,extra_json FROM monthly_plans WHERE workspace_id=? AND company_id <=> ? AND jalali_year=? AND month_name=? AND work_type=? AND legal_deadline <=> ? LIMIT 1");
+        $st->execute([Tenant::id(),$cid,$year,$month,$work,$deadline]);$old=$st->fetch();
         if($old){
             $oldExtra=json_decode((string)($old['extra_json']??''),true);if(!is_array($oldExtra))$oldExtra=[];
             $extra=array_merge($oldExtra,$extra);
-            pdo()->prepare("UPDATE monthly_plans SET season=?,status=?,work_day=?,completed_date=?,notes=?,extra_json=?,updated_at=NOW() WHERE id=?")->execute([$season,$status,$workDay,$completed,$notes,json_encode($extra,JSON_UNESCAPED_UNICODE),(int)$old['id']]);
+            pdo()->prepare("UPDATE monthly_plans SET season=?,status=?,work_day=?,completed_date=?,notes=?,extra_json=?,updated_at=NOW() WHERE id=? AND workspace_id=?")->execute([$season,$status,$workDay,$completed,$notes,json_encode($extra,JSON_UNESCAPED_UNICODE),(int)$old['id'],Tenant::id()]);
             $s['updated']++;
         }else{
-            pdo()->prepare("INSERT INTO monthly_plans (company_id,jalali_year,month_name,season,work_type,legal_deadline,status,work_day,completed_date,notes,extra_json,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,NOW(),NOW())")->execute([$cid,$year,$month,$season,$work,$deadline,$status,$workDay,$completed,$notes,json_encode($extra,JSON_UNESCAPED_UNICODE),(int)Auth::user()['id']]);
+            pdo()->prepare("INSERT INTO monthly_plans (workspace_id,company_id,jalali_year,month_name,season,work_type,legal_deadline,status,work_day,completed_date,notes,extra_json,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(),NOW())")->execute([Tenant::id(),$cid,$year,$month,$season,$work,$deadline,$status,$workDay,$completed,$notes,json_encode($extra,JSON_UNESCAPED_UNICODE),(int)Auth::user()['id']]);
             $s['inserted']++;
         }
     }
@@ -357,9 +357,9 @@ class AccountingDataIO
             $u=self::value($r,$idx,[$p['url'].' | نام کاربری']);
             $pw=self::value($r,$idx,[$p['url'].' | کلمه عبور']);
             if($u===''&&$pw==='')continue;
-            $old=pdo()->prepare("SELECT username,password_enc FROM portal_credentials WHERE company_id=? AND portal_key=?");$old->execute([$cid,$p['portal_key']]);$current=$old->fetch();
+            $old=pdo()->prepare("SELECT username,password_enc FROM portal_credentials WHERE workspace_id=? AND company_id=? AND portal_key=?");$old->execute([Tenant::id(),$cid,$p['portal_key']]);$current=$old->fetch();
             if($pw===''&&$current)$enc=$current['password_enc']; else $enc=encrypt_value($pw);
-            pdo()->prepare("INSERT INTO portal_credentials (company_id,portal_key,username,password_enc,updated_at) VALUES (?,?,?,?,NOW()) ON DUPLICATE KEY UPDATE username=VALUES(username),password_enc=VALUES(password_enc),updated_at=NOW()")->execute([$cid,$p['portal_key'],$u,$enc]);
+            pdo()->prepare("INSERT INTO portal_credentials (workspace_id,company_id,portal_key,username,password_enc,updated_at) VALUES (?,?,?,?,?,NOW()) ON DUPLICATE KEY UPDATE username=VALUES(username),password_enc=VALUES(password_enc),updated_at=NOW()")->execute([Tenant::id(),$cid,$p['portal_key'],$u,$enc]);
             $changed=true;
         }
         if($changed)$s['updated']++;else$s['skipped']++;
@@ -371,8 +371,8 @@ class AccountingDataIO
         if(!in_array($entity,['companies','daily_plans','monthly_plans'],true))throw new RuntimeException('بخش فیلد اضافی معتبر نیست.');
         if($key===''||$label==='')throw new RuntimeException('کلید یا عنوان خالی است.');
         $type=self::value($r,$idx,['نوع'],'text')?:'text';$options=self::value($r,$idx,['گزینه‌ها']);$sort=(int)(self::value($r,$idx,['ترتیب'],'100')?:100);
-        $exists=pdo()->prepare("SELECT id FROM custom_fields WHERE entity_key=? AND field_key=?");$exists->execute([$entity,$key]);$id=$exists->fetchColumn();
-        pdo()->prepare("INSERT INTO custom_fields (entity_key,field_key,label,field_type,options,sort_order,active,created_at,updated_at) VALUES (?,?,?,?,?,?,1,NOW(),NOW()) ON DUPLICATE KEY UPDATE label=VALUES(label),field_type=VALUES(field_type),options=VALUES(options),sort_order=VALUES(sort_order),active=1,updated_at=NOW()")->execute([$entity,$key,$label,$type,$options,$sort]);
+        $exists=pdo()->prepare("SELECT id FROM custom_fields WHERE workspace_id=? AND entity_key=? AND field_key=?");$exists->execute([Tenant::id(),$entity,$key]);$id=$exists->fetchColumn();
+        pdo()->prepare("INSERT INTO custom_fields (workspace_id,entity_key,field_key,label,field_type,options,sort_order,active,created_at,updated_at) VALUES (?,?,?,?,?,?,?,1,NOW(),NOW()) ON DUPLICATE KEY UPDATE label=VALUES(label),field_type=VALUES(field_type),options=VALUES(options),sort_order=VALUES(sort_order),active=1,updated_at=NOW()")->execute([Tenant::id(),$entity,$key,$label,$type,$options,$sort]);
         $id?$s['updated']++:$s['inserted']++;
     }
 

@@ -1,5 +1,6 @@
 <?php
 require __DIR__ . '/app/bootstrap.php';
+require_once __DIR__.'/app/Modules/V4Module.php';
 if (file_exists(__DIR__.'/app/config.php')) {
     try { Schema::migrate(pdo()); } catch (Throwable $e) { /* migrate page shows exact error */ }
 }
@@ -18,7 +19,10 @@ function day_name(?string $d): string {
     $days=['Saturday'=>'شنبه','Sunday'=>'یکشنبه','Monday'=>'دوشنبه','Tuesday'=>'سه‌شنبه','Wednesday'=>'چهارشنبه','Thursday'=>'پنجشنبه','Friday'=>'جمعه'];
     return $days[date('l', strtotime($d))] ?? '';
 }
-function companies(bool $all=false): array { return q("SELECT * FROM companies ".($all?'':'WHERE active=1')." ORDER BY name"); }
+function companies(bool $all=false): array {
+    $wid=Tenant::id();
+    return q("SELECT * FROM companies WHERE workspace_id=? ".($all?'':'AND active=1')." ORDER BY name",[$wid]);
+}
 function company_options($selected=null, bool $all=false): string {
     $html=$all?'<option value="">همه شرکت‌ها</option>':'';
     foreach (companies() as $c) {
@@ -53,7 +57,7 @@ function work_type_options($selected='', bool $all=false): string {
     return $html;
 }
 function portal_definitions(): array { return q("SELECT * FROM portal_definitions WHERE active=1 ORDER BY sort_order,id"); }
-function custom_fields(string $entity): array { return q("SELECT * FROM custom_fields WHERE entity_key=? AND active=1 ORDER BY sort_order,id", [$entity]); }
+function custom_fields(string $entity): array { return q("SELECT * FROM custom_fields WHERE workspace_id=? AND entity_key=? AND active=1 ORDER BY sort_order,id", [Tenant::id(),$entity]); }
 function extra_decode($json): array { if(!$json) return []; $a=json_decode((string)$json,true); return is_array($a)?$a:[]; }
 function extra_encode(array $data): string { return json_encode($data, JSON_UNESCAPED_UNICODE); }
 function render_extra_inputs(string $entity, array $extra=[]): string {
@@ -91,10 +95,11 @@ function quick_filters(array $fields): string {
     return $html;
 }
 function log_activity(string $entity, int $id, string $action, string $summary='', array $payload=[]): void {
+    Audit::log($action,$entity,$id,$summary,null,null,$payload);
     try{
         $uid=Auth::check() ? (int)Auth::user()['id'] : null;
-        $st=pdo()->prepare("INSERT INTO activity_logs (user_id,entity_key,record_id,action,summary,payload,ip,created_at) VALUES (?,?,?,?,?,?,?,NOW())");
-        $st->execute([$uid,$entity,$id,$action,$summary,extra_encode($payload),$_SERVER['REMOTE_ADDR']??'']);
+        $st=pdo()->prepare("INSERT INTO activity_logs (workspace_id,user_id,entity_key,record_id,action,summary,payload,ip,created_at) VALUES (?,?,?,?,?,?,?,?,NOW())");
+        $st->execute([Tenant::id(),$uid,$entity,$id,$action,$summary,extra_encode($payload),$_SERVER['REMOTE_ADDR']??'']);
     }catch(Throwable $e){}
 }
 function editable_cell(string $field, $value, string $extraClass=''): string {
@@ -121,7 +126,7 @@ function table_preferences_json(string $tableKey): string
 {
     if(!Auth::check()) return '{}';
     try{
-        $r=one("SELECT prefs_json FROM user_table_preferences WHERE user_id=? AND table_key=? LIMIT 1",[(int)Auth::user()['id'],$tableKey]);
+        $r=one("SELECT prefs_json FROM user_table_preferences WHERE workspace_id=? AND user_id=? AND table_key=? LIMIT 1",[Tenant::id(),(int)Auth::user()['id'],$tableKey]);
         $raw=(string)($r['prefs_json']??'{}');
         $decoded=json_decode($raw,true);
         return is_array($decoded) ? json_encode($decoded,JSON_UNESCAPED_UNICODE) : '{}';
@@ -184,10 +189,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (Auth::attempt($_POST['email'] ?? '', $_POST['password'] ?? '')) redirect('index.php');
         flash('ایمیل یا رمز عبور اشتباه است.','danger'); redirect('index.php?page=login');
     }
-    if ($action === 'logout') { verify_csrf(); Auth::logout(); redirect('index.php?page=login'); }
+    if ($action === 'logout') { verify_csrf(); if(Auth::check()){Tenant::boot();Audit::log('auth.logout','users',(int)Auth::user()['id'],'خروج کاربر');} unset($_SESSION['_v4_login_audited']); Auth::logout(); redirect('index.php?page=login'); }
 
     Auth::require(); verify_csrf();
     try {
+        if (str_starts_with($action,'v4_')) V4Module::handle($action);
         if ($action === 'inline_update') handle_inline_update();
         if ($action === 'delete_record') handle_delete_record();
         if ($action === 'save_company') handle_save_company();
@@ -208,11 +214,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 function handle_inline_update(): never
 {
-    $entity=$_POST['entity']??''; $id=(int)($_POST['id']??0); $field=$_POST['field']??''; $value=trim((string)($_POST['value']??''));
+    $entity=$_POST['entity']??'';
+    $pm=['companies'=>'companies.update','daily_plans'=>'daily.update','monthly_plans'=>'monthly.update','custom_fields'=>'custom_fields.manage']; if(isset($pm[$entity])) Tenant::requirePermission($pm[$entity]); $id=(int)($_POST['id']??0); $field=$_POST['field']??''; $value=trim((string)($_POST['value']??''));
     if(!$id) throw new RuntimeException('شناسه نامعتبر است.');
     $map = [
         'companies'=>['table'=>'companies','fields'=>['name','company_type','legal_personality','national_id','economic_code','registration_number','address','postal_code','phone','ceo_name','ceo_national_id','ceo_mobile','software']],
-        'daily_plans'=>['table'=>'daily_plans','fields'=>['plan_date','day_name','company_id','work_description','location','notes']],
+        'daily_plans'=>['table'=>'daily_plans','fields'=>['plan_date','day_name','company_id','work_description','notes']],
         'monthly_plans'=>['table'=>'monthly_plans','fields'=>['company_id','month_name','season','work_type','legal_deadline','status','work_day','completed_date']],
         'custom_fields'=>['table'=>'custom_fields','fields'=>['entity_key','label','field_type','options','sort_order']],
     ];
@@ -222,18 +229,18 @@ function handle_inline_update(): never
     if (str_starts_with($field,'extra.')) {
         if(!in_array($entity,['companies','daily_plans','monthly_plans'],true)) throw new RuntimeException('فیلد اضافی این بخش قابل ویرایش نیست.');
         $key=substr($field,6);
-        $row=one("SELECT extra_json FROM `$table` WHERE id=?",[$id]);
+        $row=one("SELECT extra_json FROM `$table` WHERE id=? AND workspace_id=?",[$id,Tenant::id()]);
         $extra=extra_decode($row['extra_json']??''); $extra[$key]=$value;
-        pdo()->prepare("UPDATE `$table` SET extra_json=?, updated_at=NOW() WHERE id=?")->execute([extra_encode($extra),$id]);
+        pdo()->prepare("UPDATE `$table` SET extra_json=?, updated_at=NOW() WHERE id=? AND workspace_id=?")->execute([extra_encode($extra),$id,Tenant::id()]);
     } else {
         if(!in_array($field,$map[$entity]['fields'],true)) throw new RuntimeException('فیلد مجاز نیست.');
         if(in_array($field,['plan_date','legal_deadline','completed_date'],true)) $value=input_date_to_sql($value);
         if($field==='company_id') $value=$value ? (int)$value : null;
         if($field==='sort_order') $value=(int)$value;
         if($entity==='daily_plans' && $field==='plan_date') {
-            pdo()->prepare("UPDATE daily_plans SET plan_date=?,day_name=?,updated_at=NOW() WHERE id=?")->execute([$value,day_name($value),$id]);
+            pdo()->prepare("UPDATE daily_plans SET plan_date=?,day_name=?,updated_at=NOW() WHERE id=? AND workspace_id=?")->execute([$value,day_name($value),$id,Tenant::id()]);
         } else {
-            pdo()->prepare("UPDATE `$table` SET `$field`=?, updated_at=NOW() WHERE id=?")->execute([$value,$id]);
+            pdo()->prepare("UPDATE `$table` SET `$field`=?, updated_at=NOW() WHERE id=? AND workspace_id=?")->execute([$value,$id,Tenant::id()]);
         }
     }
     log_activity($entity,$id,'inline_update',$field,['value'=>$value]);
@@ -241,18 +248,19 @@ function handle_inline_update(): never
 }
 function handle_delete_record(): never
 {
-    $entity=$_POST['entity']??''; $id=(int)($_POST['id']??0); if(!$id) throw new RuntimeException('شناسه نامعتبر است.');
+    $entity=$_POST['entity']??'';
+    $pm=['companies'=>'companies.delete','daily_plans'=>'daily.delete','monthly_plans'=>'monthly.delete','custom_fields'=>'custom_fields.manage']; if(isset($pm[$entity])) Tenant::requirePermission($pm[$entity]); $id=(int)($_POST['id']??0); if(!$id) throw new RuntimeException('شناسه نامعتبر است.');
     $map=['companies'=>'companies','daily_plans'=>'daily_plans','monthly_plans'=>'monthly_plans','custom_fields'=>'custom_fields'];
     if(!isset($map[$entity])) throw new RuntimeException('حذف این بخش مجاز نیست.');
-    if($entity==='companies') pdo()->prepare("UPDATE companies SET active=0, updated_at=NOW() WHERE id=?")->execute([$id]);
-    elseif($entity==='custom_fields') pdo()->prepare("UPDATE custom_fields SET active=0, updated_at=NOW() WHERE id=?")->execute([$id]);
-    else pdo()->prepare("DELETE FROM `{$map[$entity]}` WHERE id=?")->execute([$id]);
+    if($entity==='companies') pdo()->prepare("UPDATE companies SET active=0, updated_at=NOW() WHERE id=? AND workspace_id=?")->execute([$id,Tenant::id()]);
+    elseif($entity==='custom_fields') pdo()->prepare("UPDATE custom_fields SET active=0, updated_at=NOW() WHERE id=? AND workspace_id=?")->execute([$id,Tenant::id()]);
+    else pdo()->prepare("DELETE FROM `{$map[$entity]}` WHERE id=? AND workspace_id=?")->execute([$id,Tenant::id()]);
     log_activity($entity,$id,'delete','حذف رکورد');
     json_out(['ok'=>true]);
 }
 function handle_save_company(): void
 {
-    $id=(int)($_POST['id']??0); $name=trim($_POST['name']??''); if(!$name) throw new RuntimeException('نام شرکت الزامی است.');
+    $id=(int)($_POST['id']??0); $id?Tenant::requirePermission('companies.update'):Tenant::requirePermission('companies.create'); $name=trim($_POST['name']??''); if(!$name) throw new RuntimeException('نام شرکت الزامی است.');
     $data=[
         $name,trim($_POST['company_type']??''),trim($_POST['legal_personality']??''),trim($_POST['national_id']??''),
         trim($_POST['economic_code']??''),trim($_POST['registration_number']??''),trim($_POST['address']??''),
@@ -261,63 +269,67 @@ function handle_save_company(): void
         extra_encode($_POST['extra']??[])
     ];
     if($id) {
-        pdo()->prepare("UPDATE companies SET name=?,company_type=?,legal_personality=?,national_id=?,economic_code=?,registration_number=?,address=?,postal_code=?,phone=?,ceo_name=?,ceo_national_id=?,ceo_mobile=?,software=?,extra_json=?,updated_at=NOW() WHERE id=?")->execute([...$data,$id]);
+        pdo()->prepare("UPDATE companies SET name=?,company_type=?,legal_personality=?,national_id=?,economic_code=?,registration_number=?,address=?,postal_code=?,phone=?,ceo_name=?,ceo_national_id=?,ceo_mobile=?,software=?,extra_json=?,updated_at=NOW() WHERE id=? AND workspace_id=?")->execute([...$data,$id,Tenant::id()]);
     } else {
-        pdo()->prepare("INSERT INTO companies (name,company_type,legal_personality,national_id,economic_code,registration_number,address,postal_code,phone,ceo_name,ceo_national_id,ceo_mobile,software,extra_json,active,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,NOW(),NOW())")->execute($data);
+        pdo()->prepare("INSERT INTO companies (workspace_id,name,company_type,legal_personality,national_id,economic_code,registration_number,address,postal_code,phone,ceo_name,ceo_national_id,ceo_mobile,software,extra_json,active,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,NOW(),NOW())")->execute([Tenant::id(),...$data]);
         $id=(int)pdo()->lastInsertId();
     }
+    FileLibrary::syncFromPost('companies',$id);
     log_activity('companies',$id,'save','ذخیره شرکت');
     flash('اطلاعات شرکت ذخیره شد.'); redirect('index.php?page=companies');
 }
 function handle_save_daily_plan(): void
 {
-    $id=(int)($_POST['id']??0);
+    $id=(int)($_POST['id']??0); $id?Tenant::requirePermission('daily.update'):Tenant::requirePermission('daily.create');
     $date=input_date_to_sql($_POST['plan_date']??'');
     $day=trim($_POST['day_name']??'') ?: day_name($date);
     $desc=trim($_POST['work_description']??''); if(!$desc) throw new RuntimeException('شرح کار الزامی است.');
-    $data=[$date,$day,(int)($_POST['company_id']?:0)?:null,$desc,trim($_POST['location']??''),trim($_POST['notes']??''),extra_encode($_POST['extra']??[])];
-    if($id) pdo()->prepare("UPDATE daily_plans SET plan_date=?,day_name=?,company_id=?,work_description=?,location=?,notes=?,extra_json=?,updated_at=NOW() WHERE id=?")->execute([...$data,$id]);
+    $data=[$date,$day,(int)($_POST['company_id']?:0)?:null,$desc,trim($_POST['notes']??''),extra_encode($_POST['extra']??[])];
+    if($id) pdo()->prepare("UPDATE daily_plans SET plan_date=?,day_name=?,company_id=?,work_description=?,notes=?,extra_json=?,updated_at=NOW() WHERE id=? AND workspace_id=?")->execute([...$data,$id,Tenant::id()]);
     else {
-        pdo()->prepare("INSERT INTO daily_plans (plan_date,day_name,company_id,work_description,location,status,notes,extra_json,created_by,created_at,updated_at) VALUES (?,?,?,?,?,'باز',?,?,?,NOW(),NOW())")->execute([...$data,Auth::user()['id']]);
+        pdo()->prepare("INSERT INTO daily_plans (workspace_id,plan_date,day_name,company_id,work_description,status,notes,extra_json,created_by,created_at,updated_at) VALUES (?,?,?,?,?,'باز',?,?,?,NOW(),NOW())")->execute([Tenant::id(),...$data,Auth::user()['id']]);
         $id=(int)pdo()->lastInsertId();
     }
+    FileLibrary::syncFromPost('daily_plans',$id);
     log_activity('daily_plans',$id,'save','ذخیره برنامه روزانه');
     flash('برنامه روزانه ذخیره شد.'); redirect('index.php?page=daily');
 }
 function handle_save_monthly_plan(): void
 {
-    $id=(int)($_POST['id']??0); $work=trim($_POST['work_type']??''); if(!$work) throw new RuntimeException('نوع کار الزامی است.');
+    $id=(int)($_POST['id']??0); $id?Tenant::requirePermission('monthly.update'):Tenant::requirePermission('monthly.create'); $work=trim($_POST['work_type']??''); if(!$work) throw new RuntimeException('نوع کار الزامی است.');
     $data=[
         (int)($_POST['company_id']?:0)?:null,(int)($_POST['jalali_year']??1405),trim($_POST['month_name']??''),
         trim($_POST['season']??''),$work,input_date_to_sql($_POST['legal_deadline']??''),trim($_POST['status']??'باز'),
         trim($_POST['work_day']??''),input_date_to_sql($_POST['completed_date']??''),trim($_POST['notes']??''),
         extra_encode($_POST['extra']??[])
     ];
-    if($id) pdo()->prepare("UPDATE monthly_plans SET company_id=?,jalali_year=?,month_name=?,season=?,work_type=?,legal_deadline=?,status=?,work_day=?,completed_date=?,notes=?,extra_json=?,updated_at=NOW() WHERE id=?")->execute([...$data,$id]);
+    if($id) pdo()->prepare("UPDATE monthly_plans SET company_id=?,jalali_year=?,month_name=?,season=?,work_type=?,legal_deadline=?,status=?,work_day=?,completed_date=?,notes=?,extra_json=?,updated_at=NOW() WHERE id=? AND workspace_id=?")->execute([...$data,$id,Tenant::id()]);
     else {
-        pdo()->prepare("INSERT INTO monthly_plans (company_id,jalali_year,month_name,season,work_type,legal_deadline,status,work_day,completed_date,notes,extra_json,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,NOW(),NOW())")->execute([...$data,Auth::user()['id']]);
+        pdo()->prepare("INSERT INTO monthly_plans (workspace_id,company_id,jalali_year,month_name,season,work_type,legal_deadline,status,work_day,completed_date,notes,extra_json,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(),NOW())")->execute([Tenant::id(),...$data,Auth::user()['id']]);
         $id=(int)pdo()->lastInsertId();
     }
+    FileLibrary::syncFromPost('monthly_plans',$id);
     log_activity('monthly_plans',$id,'save','ذخیره برنامه ماهانه');
     flash('برنامه ماهانه ذخیره شد.'); redirect('index.php?page=monthly');
 }
 function handle_save_system_credentials(): never
 {
+    Tenant::requirePermission('systems.update');
     $companyId=(int)($_POST['company_id']??0); if(!$companyId) throw new RuntimeException('شرکت نامعتبر است.');
     $payload=json_decode($_POST['credentials']??'{}',true); if(!is_array($payload)) throw new RuntimeException('داده سامانه‌ها نامعتبر است.');
     $portals=portal_definitions(); $allowed=[]; foreach($portals as $p) $allowed[$p['portal_key']]=true;
     $pdo=pdo(); $pdo->beginTransaction();
     try {
-        $st=$pdo->prepare("INSERT INTO portal_credentials (company_id,portal_key,username,password_enc,updated_at) VALUES (?,?,?,?,NOW()) ON DUPLICATE KEY UPDATE username=VALUES(username),password_enc=VALUES(password_enc),updated_at=NOW()");
+        $st=$pdo->prepare("INSERT INTO portal_credentials (workspace_id,company_id,portal_key,username,password_enc,updated_at) VALUES (?,?,?,?,?,NOW()) ON DUPLICATE KEY UPDATE username=VALUES(username),password_enc=VALUES(password_enc),updated_at=NOW()");
         foreach($payload as $key=>$cred){
             if(!isset($allowed[$key]) || !is_array($cred)) continue;
             $username=trim((string)($cred['username']??''));
             $password=(string)($cred['password']??'');
             if($username==='' && $password===''){
-                $pdo->prepare("DELETE FROM portal_credentials WHERE company_id=? AND portal_key=?")->execute([$companyId,$key]);
+                $pdo->prepare("DELETE FROM portal_credentials WHERE workspace_id=? AND company_id=? AND portal_key=?")->execute([Tenant::id(),$companyId,$key]);
                 continue;
             }
-            $st->execute([$companyId,$key,$username,encrypt_value($password)]);
+            $st->execute([Tenant::id(),$companyId,$key,$username,encrypt_value($password)]);
         }
         $pdo->commit();
     } catch(Throwable $e){ if($pdo->inTransaction()) $pdo->rollBack(); throw $e; }
@@ -326,20 +338,23 @@ function handle_save_system_credentials(): never
 }
 function handle_delete_system_credentials(): never
 {
+    Tenant::requirePermission('systems.update');
     $companyId=(int)($_POST['company_id']??0); if(!$companyId) throw new RuntimeException('شرکت نامعتبر است.');
-    pdo()->prepare("DELETE FROM portal_credentials WHERE company_id=?")->execute([$companyId]);
+    pdo()->prepare("DELETE FROM portal_credentials WHERE workspace_id=? AND company_id=?")->execute([Tenant::id(),$companyId]);
     log_activity('portal_credentials',$companyId,'delete','پاک‌کردن دسترسی سامانه‌ها');
     json_out(['ok'=>true]);
 }
 function handle_save_custom_field(): void
 {
+    Tenant::requirePermission('custom_fields.manage');
     $label=trim($_POST['label']??''); $entity=trim($_POST['entity_key']??'');
     if(!$label || !$entity) throw new RuntimeException('عنوان و بخش الزامی است.');
     if(!in_array($entity,['companies','daily_plans','monthly_plans'],true)) throw new RuntimeException('بخش نامعتبر است.');
     $key=trim($_POST['field_key']??'') ?: 'field_'.time();
     $key=preg_replace('/[^a-zA-Z0-9_]+/','_',strtolower($key)); if(!$key) $key='field_'.time();
-    pdo()->prepare("INSERT INTO custom_fields (entity_key,field_key,label,field_type,options,sort_order,active,created_at,updated_at) VALUES (?,?,?,?,?,?,1,NOW(),NOW()) ON DUPLICATE KEY UPDATE label=VALUES(label),field_type=VALUES(field_type),options=VALUES(options),sort_order=VALUES(sort_order),active=1,updated_at=NOW()")
-        ->execute([$entity,$key,$label,trim($_POST['field_type']??'text'),trim($_POST['options']??''),(int)($_POST['sort_order']??100)]);
+    pdo()->prepare("INSERT INTO custom_fields (workspace_id,entity_key,field_key,label,field_type,options,sort_order,active,created_at,updated_at) VALUES (?,?,?,?,?,?,?,1,NOW(),NOW()) ON DUPLICATE KEY UPDATE label=VALUES(label),field_type=VALUES(field_type),options=VALUES(options),sort_order=VALUES(sort_order),active=1,updated_at=NOW()")
+        ->execute([Tenant::id(),$entity,$key,$label,trim($_POST['field_type']??'text'),trim($_POST['options']??''),(int)($_POST['sort_order']??100)]);
+    $fid=one("SELECT id FROM custom_fields WHERE workspace_id=? AND entity_key=? AND field_key=? LIMIT 1",[Tenant::id(),$entity,$key]); if($fid) FileLibrary::syncFromPost('custom_fields',(int)$fid['id']);
     flash('فیلد اضافی ذخیره شد.'); redirect('index.php?page=custom_fields');
 }
 function handle_save_table_preferences(): never
@@ -363,20 +378,21 @@ function handle_save_table_preferences(): never
     $clean['hidden']=array_values(array_unique($clean['hidden']));
     $json=json_encode($clean,JSON_UNESCAPED_UNICODE);
     $uid=(int)Auth::user()['id'];
-    pdo()->prepare("INSERT INTO user_table_preferences (user_id,table_key,prefs_json,updated_at) VALUES (?,?,?,NOW()) ON DUPLICATE KEY UPDATE prefs_json=VALUES(prefs_json),updated_at=NOW()")
-        ->execute([$uid,$key,$json]);
+    pdo()->prepare("INSERT INTO user_table_preferences (workspace_id,user_id,table_key,prefs_json,updated_at) VALUES (?,?,?,?,NOW()) ON DUPLICATE KEY UPDATE prefs_json=VALUES(prefs_json),updated_at=NOW()")
+        ->execute([Tenant::id(),$uid,$key,$json]);
     json_out(['ok'=>true,'prefs'=>$clean]);
 }
 function handle_reset_table_preferences(): never
 {
     $key=trim((string)($_POST['table_key']??''));
     if(!preg_match('/^[a-zA-Z0-9_.:-]{1,120}$/',$key)) throw new RuntimeException('کلید لیست نامعتبر است.');
-    pdo()->prepare("DELETE FROM user_table_preferences WHERE user_id=? AND table_key=?")->execute([(int)Auth::user()['id'],$key]);
+    pdo()->prepare("DELETE FROM user_table_preferences WHERE workspace_id=? AND user_id=? AND table_key=?")->execute([Tenant::id(),(int)Auth::user()['id'],$key]);
     json_out(['ok'=>true]);
 }
 
 function handle_save_settings(): void
 {
+    Tenant::requirePermission('settings.manage'); if(!Tenant::isPlatformAdmin()) throw new RuntimeException('تنظیمات زیرساخت فقط برای مدیر کل پلتفرم مجاز است.');
     $plain=['notifications_email_to','notifications_sms_to','ghasedak_line_number','google_client_id','google_redirect_uri','allow_google_signup','smtp_host','smtp_port','smtp_encryption','smtp_username','mail_from_name','edge_service_url','cache_ttl_seconds','api_enabled'];
     $secret=['smtp_password','ghasedak_api_key','google_client_secret','edge_service_token'];
     foreach($plain as $k) setting_set($k, trim((string)($_POST[$k]??'')),0);
@@ -396,12 +412,20 @@ function render_header(string $title, string $subtitle=''): void
         'daily'=>'برنامه روزانه',
         'custom_fields'=>'فیلدهای اضافه',
         'kanban'=>'کانبان',
+        'notes'=>'نوت‌ها',
+        'library'=>'لایبرری',
+        'access'=>'کاربران و دسترسی‌ها',
+        'platform'=>'مدیریت SaaS',
         'settings'=>'تنظیمات',
     ];
+    $navPerm=['dashboard'=>'dashboard.view','companies'=>'companies.view','systems'=>'systems.view','monthly'=>'monthly.view','daily'=>'daily.view','custom_fields'=>'custom_fields.manage','kanban'=>'kanban.view','notes'=>'notes.view','library'=>'files.view','access'=>'members.view','settings'=>'settings.manage'];
+    foreach($navPerm as $nk=>$np) if(isset($nav[$nk]) && !Tenant::can($np)) unset($nav[$nk]);
+    if(!Tenant::isPlatformAdmin()) unset($nav['platform']);
+    if(!Tenant::isPlatformAdmin()) unset($nav['settings']);
     ?><!doctype html><html lang="fa" dir="rtl"><head>
     <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
     <title><?=h($title)?> - Accounting CRM</title>
-    <link rel="stylesheet" href="assets/style.css?v=3.3">
+    <link rel="stylesheet" href="assets/style.css?v=4.1"><link rel="stylesheet" href="assets/v4.css?v=4.1">
     </head><body><div class="app">
     <aside class="sidebar compact"><div class="brand">Accounting CRM<span>سامانه سبک حسابداران</span></div><nav>
     <?php foreach($nav as $k=>$v): ?><a class="<?=($_GET['page']??'dashboard')===$k?'active':''?>" href="index.php?page=<?=$k?>"><?=h($v)?></a><?php endforeach; ?>
@@ -411,10 +435,14 @@ function render_header(string $title, string $subtitle=''): void
     <form method="post" class="inline-form"><?=csrf_field()?><input type="hidden" name="action" value="logout"><button class="btn tiny" type="submit">خروج</button></form></div></header>
     <?php foreach(flashes() as $f): ?><div class="alert <?=h($f['type'])?>"><?=h($f['msg'])?></div><?php endforeach; ?><?php
 }
-function render_footer(): void { ?></main></div><script>window.CSRF='<?=h(csrf_token())?>';window.JALALI_TODAY='<?=h(Jalali::today())?>';</script><script src="assets/app.js?v=3.3"></script></body></html><?php }
+function render_footer(): void { ?></main></div><script>window.CSRF='<?=h(csrf_token())?>';window.JALALI_TODAY='<?=h(Jalali::today())?>';window.V4_WORKSPACE_ID=<?=Tenant::id()?>;window.V4_WORKSPACES=<?=json_encode(Tenant::workspaceOptions(),JSON_UNESCAPED_UNICODE|JSON_HEX_TAG|JSON_HEX_AMP)?>;</script><script src="assets/app.js?v=4.1"></script><script src="assets/v4.js?v=4.1"></script></body></html><?php }
 
 if ($page === 'login') { render_login(); exit; }
-Auth::require();
+Auth::require(); Tenant::boot(); V4Module::ensureSchema();
+if($_SERVER['REQUEST_METHOD']==='GET' && $page!=='login') Audit::log('page.view','page',0,$page);
+$pagePermission=['dashboard'=>'dashboard.view','companies'=>'companies.view','systems'=>'systems.view','monthly'=>'monthly.view','daily'=>'daily.view','kanban'=>'kanban.view','custom_fields'=>'custom_fields.manage','settings'=>'settings.manage'];
+if(isset($pagePermission[$page])) Tenant::requirePermission($pagePermission[$page]);
+if($page==='settings' && !Tenant::isPlatformAdmin()) { http_response_code(403); throw new RuntimeException('تنظیمات زیرساخت فقط برای مدیر کل پلتفرم در دسترس است.'); }
 
 if ($page === 'dashboard') render_calendar();
 elseif($page === 'companies') render_companies();
@@ -423,18 +451,22 @@ elseif($page === 'monthly') render_monthly();
 elseif($page === 'daily') render_daily();
 elseif($page === 'custom_fields') render_custom_fields();
 elseif($page === 'kanban') render_kanban();
+elseif($page === 'notes') V4Module::renderNotes();
+elseif($page === 'library') V4Module::renderLibrary();
+elseif($page === 'access') V4Module::renderAccess();
+elseif($page === 'platform') V4Module::renderPlatform();
 elseif($page === 'settings') render_settings();
 else render_calendar();
 
 function render_login(): void
 {
-    ?><!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ورود</title><link rel="stylesheet" href="assets/style.css?v=3.3"></head>
+    ?><!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ورود</title><link rel="stylesheet" href="assets/style.css?v=4.1"><link rel="stylesheet" href="assets/v4.css?v=4.1"></head>
     <body class="login-page"><main class="login-card"><h1>ورود به سامانه حسابداران</h1><p>تقویم کاری، شرکت‌ها، سامانه‌ها و برنامه‌های حسابداری</p>
     <?php foreach(flashes() as $f): ?><div class="alert <?=h($f['type'])?>"><?=h($f['msg'])?></div><?php endforeach; ?>
     <form method="post" class="grid-form autosave" data-form-key="login"><?=csrf_field()?><input type="hidden" name="action" value="login">
     <label>ایمیل<input type="email" name="email" required></label><label>رمز عبور<input type="password" name="password" required></label>
     <button class="btn primary" type="submit">ورود</button><a class="btn google" href="index.php?page=google_start">ورود یا ثبت‌نام با گوگل</a></form></main>
-    <script src="assets/app.js?v=3.3"></script></body></html><?php
+    <script src="assets/app.js?v=4.1"></script><script src="assets/v4.js?v=4.1"></script></body></html><?php
 }
 function render_calendar(): void
 {
@@ -446,11 +478,11 @@ function render_calendar(): void
     $end=Jalali::parse(sprintf('%04d/%02d/%02d',$jy,$jm,$days));
     $company=(int)($_GET['company_id']??0);
 
-    $params=[$start,$end]; $where="d.plan_date BETWEEN ? AND ?";
+    $params=[Tenant::id(),$start,$end]; $where="d.workspace_id=? AND d.plan_date BETWEEN ? AND ?";
     if($company){$where.=" AND d.company_id=?";$params[]=$company;}
-    $daily=q("SELECT d.id,d.plan_date event_date,d.work_description title,d.location detail,d.status,d.notes,c.name company_name,'daily' source FROM daily_plans d LEFT JOIN companies c ON c.id=d.company_id WHERE $where ORDER BY d.plan_date,d.id",$params);
+    $daily=q("SELECT d.id,d.plan_date event_date,d.work_description title,'' detail,d.status,d.notes,c.name company_name,'daily' source FROM daily_plans d LEFT JOIN companies c ON c.id=d.company_id WHERE $where ORDER BY d.plan_date,d.id",$params);
 
-    $params=[$start,$end]; $where="m.legal_deadline BETWEEN ? AND ?";
+    $params=[Tenant::id(),$start,$end]; $where="m.workspace_id=? AND m.legal_deadline BETWEEN ? AND ?";
     if($company){$where.=" AND m.company_id=?";$params[]=$company;}
     $monthly=q("SELECT m.id,m.legal_deadline event_date,m.work_type title,CONCAT(COALESCE(m.month_name,''),' - ',COALESCE(m.season,'')) detail,m.status,m.notes,c.name company_name,'monthly' source FROM monthly_plans m LEFT JOIN companies c ON c.id=m.company_id WHERE $where ORDER BY m.legal_deadline,m.id",$params);
 
@@ -522,7 +554,7 @@ function render_companies(): void
     <label>نرم‌افزار<input name="software" value="'.h($_GET['software']??'').'"></label>
     <button class="btn primary tiny">فیلتر</button><a class="btn tiny" href="index.php?page=companies">پاک کردن</a></form>';
 
-    $where=['active=1'];$params=[];
+    $where=['workspace_id=?','active=1'];$params=[Tenant::id()];
     if($v=trim($_GET['q']??'')){ $where[]="(name LIKE ? OR national_id LIKE ? OR economic_code LIKE ? OR registration_number LIKE ? OR ceo_name LIKE ? OR phone LIKE ?)"; $l="%$v%"; array_push($params,$l,$l,$l,$l,$l,$l); }
     if($v=trim($_GET['company_type']??'')){ $where[]="company_type LIKE ?";$params[]="%$v%"; }
     if($v=trim($_GET['legal_personality']??'')){ $where[]="legal_personality=?";$params[]=$v; }
@@ -557,7 +589,7 @@ function render_companies(): void
 function render_systems(): void
 {
     render_header('سامانه‌ها','دسترسی سامانه‌های هر شرکت؛ رمزها در دیتابیس به‌صورت رمزگذاری‌شده نگهداری می‌شوند.');
-    $qv=trim($_GET['q']??''); $where='active=1';$params=[]; if($qv!==''){$where.=' AND name LIKE ?';$params[]="%$qv%";}
+    $qv=trim($_GET['q']??''); $where='workspace_id=? AND active=1';$params=[Tenant::id()]; if($qv!==''){$where.=' AND name LIKE ?';$params[]="%$qv%";}
     $companies=q("SELECT * FROM companies WHERE $where ORDER BY name",$params);
     $portals=portal_definitions();
 
@@ -569,7 +601,7 @@ function render_systems(): void
     }
     echo '</tr></thead><tbody>';
 
-    $credRows=q("SELECT * FROM portal_credentials"); $creds=[];
+    $credRows=q("SELECT * FROM portal_credentials WHERE workspace_id=?",[Tenant::id()]); $creds=[];
     foreach($credRows as $cr) $creds[(int)$cr['company_id']][$cr['portal_key']]=$cr;
     foreach($companies as $c){
         echo '<tr data-system-row data-company-id="'.(int)$c['id'].'"><td><div class="row-actions"><button type="button" class="btn icon" data-edit-system>ویرایش</button><button type="button" class="btn icon danger" data-delete-system>حذف</button></div></td><td class="system-company">'.h($c['name']).'</td>';
@@ -591,21 +623,21 @@ function render_daily(): void
     <label>روز<input name="day_name"></label>
     <label>شرکت<select name="company_id">'.company_options().'</select></label>
     <label class="span2">شرح کار<input name="work_description" required></label>
-    <label>موقعیت<input name="location" placeholder="حضوری، دورکاری، بانک، اداره مالیات..."></label>
+
     <label class="span2">توضیحات<input name="notes"></label>'.
     render_extra_inputs('daily_plans').'<button class="btn primary">ذخیره</button></form></details></section>'.
-    quick_filters(['q'=>['label'=>'جستجو'],'company_id'=>['label'=>'شرکت','type'=>'company'],'location'=>['label'=>'موقعیت'],'from'=>['label'=>'از تاریخ'],'to'=>['label'=>'تا تاریخ']]);
+    quick_filters(['q'=>['label'=>'جستجو'],'company_id'=>['label'=>'شرکت','type'=>'company'],'from'=>['label'=>'از تاریخ'],'to'=>['label'=>'تا تاریخ']]);
 
-    $where=['1=1'];$params=[];
+    $where=['d.workspace_id=?','1=1'];$params=[Tenant::id()];
     if($v=trim($_GET['q']??'')){ $where[]="(work_description LIKE ? OR notes LIKE ?)";$l="%$v%";array_push($params,$l,$l);}
     if($v=$_GET['company_id']??''){ $where[]='d.company_id=?';$params[]=$v;}
-    if($v=trim($_GET['location']??'')){ $where[]='d.location LIKE ?';$params[]="%$v%";}
+
     if($v=trim($_GET['from']??'')){ $where[]='d.plan_date>=?';$params[]=input_date_to_sql($v);}
     if($v=trim($_GET['to']??'')){ $where[]='d.plan_date<=?';$params[]=input_date_to_sql($v);}
     $rows=q("SELECT d.*,c.name company_name FROM daily_plans d LEFT JOIN companies c ON c.id=d.company_id WHERE ".implode(' AND ',$where)." ORDER BY plan_date DESC,id DESC LIMIT 500",$params);
     $fields=custom_fields('daily_plans');
 
-    echo '<section class="card table-card"><div class="table-wrap"><table class="data-table compact-table smart-table" data-entity="daily_plans"'.smart_table_attrs('daily_plans').'><thead><tr><th data-col-key="actions">عملیات</th><th data-col-key="plan_date">تاریخ</th><th data-col-key="day_name">روز</th><th data-col-key="company_id">شرکت</th><th data-col-key="work_description">شرح کار</th><th data-col-key="location">موقعیت</th><th data-col-key="notes">توضیحات</th>';
+    echo '<section class="card table-card"><div class="table-wrap"><table class="data-table compact-table smart-table" data-entity="daily_plans"'.smart_table_attrs('daily_plans').'><thead><tr><th data-col-key="actions">عملیات</th><th data-col-key="plan_date">تاریخ</th><th data-col-key="day_name">روز</th><th data-col-key="company_id">شرکت</th><th data-col-key="work_description">شرح کار</th><th data-col-key="notes">توضیحات</th>';
     foreach($fields as $f) echo '<th data-col-key="extra.'.h($f['field_key']).'">'.h($f['label']).'</th>'; echo '</tr></thead><tbody>';
     foreach($rows as $r){
         $extra=extra_decode($r['extra_json']??'');
@@ -614,7 +646,6 @@ function render_daily(): void
         echo editable_cell('day_name',$r['day_name']);
         echo '<td>'.company_select_inline($r['company_id']).'</td>';
         echo editable_cell('work_description',$r['work_description'],'wide-cell');
-        echo editable_cell('location',$r['location']);
         echo editable_cell('notes',$r['notes'],'wide-cell');
         foreach($fields as $f) echo editable_cell('extra.'.$f['field_key'],$extra[$f['field_key']]??'');
         echo '</tr>';
@@ -638,7 +669,7 @@ function render_monthly(): void
     render_extra_inputs('monthly_plans').'<button class="btn primary">ذخیره</button></form></details></section>'.
     quick_filters(['q'=>['label'=>'جستجو'],'company_id'=>['label'=>'شرکت','type'=>'company'],'status'=>['label'=>'وضعیت','type'=>'status'],'month'=>['label'=>'ماه','type'=>'month'],'season'=>['label'=>'فصل','type'=>'season'],'work_type'=>['label'=>'نوع کار','type'=>'work_type']]);
 
-    $where=['1=1'];$params=[];
+    $where=['m.workspace_id=?','1=1'];$params=[Tenant::id()];
     if($v=trim($_GET['q']??'')){ $where[]="(m.notes LIKE ? OR m.work_day LIKE ? OR m.work_type LIKE ?)";$l="%$v%";array_push($params,$l,$l,$l);}
     if($v=$_GET['company_id']??''){ $where[]='m.company_id=?';$params[]=$v;}
     if($v=$_GET['status']??''){ $where[]='m.status=?';$params[]=$v;}
@@ -675,7 +706,7 @@ function render_custom_fields(): void
     <label>نوع فیلد<select name="field_type"><option value="text">متن</option><option value="number">عدد</option><option value="date">تاریخ</option><option value="select">لیست</option></select></label>
     <label>گزینه‌ها<input name="options" placeholder="برای لیست با ، جدا شود"></label><label>ترتیب<input name="sort_order" value="100"></label><button class="btn primary">افزودن فیلد</button></form></details></section>';
 
-    $rows=q("SELECT * FROM custom_fields WHERE active=1 AND entity_key IN ('companies','daily_plans','monthly_plans') ORDER BY entity_key,sort_order,id");
+    $rows=q("SELECT * FROM custom_fields WHERE workspace_id=? AND active=1 AND entity_key IN ('companies','daily_plans','monthly_plans') ORDER BY entity_key,sort_order,id",[Tenant::id()]);
     echo '<section class="card table-card"><div class="table-wrap"><table class="data-table compact-table smart-table" data-entity="custom_fields"'.smart_table_attrs('custom_fields').'><thead><tr><th data-col-key="actions">عملیات</th><th data-col-key="entity_key">بخش</th><th data-col-key="field_key">کلید</th><th data-col-key="label">عنوان</th><th data-col-key="field_type">نوع</th><th data-col-key="options">گزینه‌ها</th><th data-col-key="sort_order">ترتیب</th></tr></thead><tbody>';
     foreach($rows as $r){
         echo '<tr data-id="'.(int)$r['id'].'"><td>'.row_actions('custom_fields',$r['id']).'</td>';
@@ -696,7 +727,7 @@ function render_kanban(): void
     $statuses=['باز','در حال انجام','منتظر مدارک','معوق','انجام شده'];
     echo '<section class="kanban" data-kanban-board><div class="kanban-help">کارت‌ها را بگیرید و بین ستون‌ها جابه‌جا کنید؛ وضعیت بلافاصله در دیتابیس ذخیره می‌شود.</div>';
     foreach($statuses as $s){
-        $params=[$s]; $where='m.status=?';
+        $params=[Tenant::id(),$s]; $where='m.workspace_id=? AND m.status=?';
         if($company){$where.=' AND m.company_id=?';$params[]=$company;}
         if($type){$where.=' AND m.work_type=?';$params[]=$type;}
         $rows=q("SELECT m.*,c.name company_name FROM monthly_plans m LEFT JOIN companies c ON c.id=m.company_id WHERE $where ORDER BY m.legal_deadline IS NULL,m.legal_deadline LIMIT 80",$params);

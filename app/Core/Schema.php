@@ -410,8 +410,16 @@ class Schema
 
     private static function seedCustomFields(PDO $pdo): void
     {
+        // V4_SAAS_CUSTOM_FIELD_SEED_GUARD
+        // SaaS mode: do not create workspace_id=NULL default fields.
+        try {
+            $st=$pdo->prepare("SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='custom_fields' AND COLUMN_NAME='workspace_id' LIMIT 1");
+            $st->execute();
+            if($st->fetchColumn()) return;
+        } catch(Throwable $e) {}
+
         $fields = [
-            ['companies','internal_code','کد داخلی','text'], ['monthly_plans','document_link','لینک مدرک','text'], ['module_records','tracking_no','شماره پیگیری','text'], ['daily_plans','duration','مدت زمان','text']
+            ['companies','internal_code','کد داخلی','text'], ['monthly_plans','document_link','لینک مدرک','text'], ['module_records','tracking_no','شماره پیگیری','text']
         ];
         $st=$pdo->prepare("INSERT INTO custom_fields (entity_key,field_key,label,field_type,sort_order,active,created_at,updated_at) VALUES (?,?,?,?,100,1,NOW(),NOW()) ON DUPLICATE KEY UPDATE label=VALUES(label)");
         foreach($fields as $f) $st->execute($f);
