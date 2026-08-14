@@ -114,6 +114,7 @@ final class V4Module
           <div class="metric card"><strong><?=count($roles)?></strong><span>نقش دسترسی</span></div>
           <div class="metric card"><strong><?=h(Tenant::current()['plan_key']??'')?></strong><span>پلن Workspace</span></div>
           <div class="metric card"><strong><?=h(Tenant::current()['subscription_status']??'')?></strong><span>وضعیت اشتراک</span></div>
+          <div class="metric card"><strong><?=h(Tenant::membership()['role_name']??'—')?></strong><span>نقش فعلی شما</span></div>
         </section>
         <?php if(Tenant::can('api.manage')):?><section class="card"><div class="section-title"><div><h2>API محیط کاری</h2><div class="muted">Tokenهای مستقل همین Workspace برای Agent، Hermes و سرویس‌های بیرونی.</div></div><div class="row-actions"><a class="btn tiny primary" href="api_tokens.php">مدیریت Token</a><a class="btn tiny" href="API_V2_SAAS_FA.md" target="_blank">راهنمای API</a><a class="btn tiny" href="openapi-v2.json" target="_blank">OpenAPI</a></div></div></section><?php endif;?>
         <?php if(Tenant::can('members.manage')):?>
@@ -178,7 +179,11 @@ final class V4Module
             <tr>
               <td><?=(int)$w['id']?></td>
               <td><b><?=h($w['name'])?></b><small class="platform-slug"><?=h($w['slug'])?></small></td>
-              <td><?=h($w['owner_name']??'—')?><small><?=h($w['owner_email']??'')?></small></td>
+              <td>
+                <?=h($w['owner_name']??'—')?><small><?=h($w['owner_email']??'')?></small>
+                <small>Role: <?=h($w['owner_role_name']??'مالک محیط')?></small>
+                <small>Platform Admin: <?=((int)($w['owner_is_platform_admin']??0)===1)?'بله':'خیر'?></small>
+              </td>
               <td><?=(int)$w['member_count']?></td>
               <td colspan="4">
                 <form method="post" class="platform-row-form"><?=csrf_field()?><input type="hidden" name="action" value="v4_platform_update_workspace"><input type="hidden" name="workspace_id" value="<?=(int)$w['id']?>">
@@ -285,28 +290,117 @@ final class V4Module
 
     private static function addMember(): void
     {
-        Tenant::requirePermission('members.manage');$email=mb_strtolower(trim((string)($_POST['email']??'')));$name=trim((string)($_POST['name']??''));$role=(int)($_POST['role_id']??0);if(!$email||!$name||!$role)throw new RuntimeException('اطلاعات کاربر کامل نیست.');
-        $st=pdo()->prepare("SELECT id FROM users WHERE email=? LIMIT 1");$st->execute([$email]);$uid=(int)$st->fetchColumn();
-        if(!$uid){$pw=(string)($_POST['password']??'');if(strlen($pw)<8)throw new RuntimeException('برای کاربر جدید رمز حداقل ۸ کاراکتر وارد کنید.');pdo()->prepare("INSERT INTO users (name,email,password_hash,role,status,created_at,updated_at) VALUES (?,?,?,'accountant','active',NOW(),NOW())")->execute([$name,$email,password_hash($pw,PASSWORD_DEFAULT)]);$uid=(int)pdo()->lastInsertId();}
-        pdo()->prepare("INSERT INTO workspace_members (workspace_id,user_id,role_id,status,joined_at,created_at,updated_at) VALUES (?,?,?,'active',NOW(),NOW(),NOW()) ON DUPLICATE KEY UPDATE role_id=VALUES(role_id),status='active',updated_at=NOW()")->execute([Tenant::id(),$uid,$role]);
-        Audit::log('member.add','workspace_members',$uid,'افزودن کاربر',['email'=>$email],['role_id'=>$role]);flash('کاربر به محیط کاری اضافه شد.');redirect('index.php?page=access');
+        Tenant::requirePermission('members.manage');
+        $wid=Tenant::id();
+
+        if(Tenant::isMainWorkspace($wid)){
+            throw new RuntimeException('محیط کاری اصلی اختصاصی مالک پلتفرم است و کاربر دیگری نمی‌تواند به آن اضافه شود.');
+        }
+
+        $email=mb_strtolower(trim((string)($_POST['email']??'')));
+        $name=trim((string)($_POST['name']??''));
+        $role=(int)($_POST['role_id']??0);
+        if(!$email||!$name||!$role)throw new RuntimeException('اطلاعات کاربر کامل نیست.');
+
+        $rst=pdo()->prepare("SELECT id,role_key,name FROM workspace_roles WHERE id=? AND workspace_id=? LIMIT 1");
+        $rst->execute([$role,$wid]);$targetRole=$rst->fetch();
+        if(!$targetRole)throw new RuntimeException('نقش انتخاب‌شده متعلق به این محیط کاری نیست.');
+        if($targetRole['role_key']==='owner' && !Tenant::isWorkspaceOwner()){
+            throw new RuntimeException('فقط مالک Workspace می‌تواند کاربر دیگری را Owner کند.');
+        }
+
+        $st=pdo()->prepare("SELECT id FROM users WHERE email=? LIMIT 1");
+        $st->execute([$email]);$uid=(int)$st->fetchColumn();
+        if(!$uid){
+            $pw=(string)($_POST['password']??'');
+            if(strlen($pw)<8)throw new RuntimeException('برای کاربر جدید رمز حداقل ۸ کاراکتر وارد کنید.');
+            pdo()->prepare("INSERT INTO users (name,email,password_hash,role,status,is_platform_admin,created_at,updated_at)
+                VALUES (?,?,?,'accountant','active',0,NOW(),NOW())")
+                ->execute([$name,$email,password_hash($pw,PASSWORD_DEFAULT)]);
+            $uid=(int)pdo()->lastInsertId();
+        }
+
+        pdo()->prepare("INSERT INTO workspace_members (workspace_id,user_id,role_id,status,joined_at,created_at,updated_at)
+            VALUES (?,?,?,'active',NOW(),NOW(),NOW())
+            ON DUPLICATE KEY UPDATE role_id=VALUES(role_id),status='active',updated_at=NOW()")
+            ->execute([$wid,$uid,$role]);
+
+        Audit::log('member.add','workspace_members',$uid,'افزودن کاربر',null,['email'=>$email,'role_key'=>$targetRole['role_key']]);
+        flash('کاربر فقط به همین محیط کاری اضافه شد.');
+        redirect('index.php?page=access');
     }
 
     private static function updateMember(): void
     {
-        Tenant::requirePermission('members.manage');$id=(int)($_POST['member_id']??0);$role=(int)($_POST['role_id']??0);
-        pdo()->prepare("UPDATE workspace_members SET role_id=?,updated_at=NOW() WHERE id=? AND workspace_id=?")->execute([$role,$id,Tenant::id()]);Audit::log('member.role','workspace_members',$id,'تغییر نقش کاربر',null,['role_id'=>$role]);redirect('index.php?page=access');
+        Tenant::requirePermission('members.manage');
+        $wid=Tenant::id();
+        $id=(int)($_POST['member_id']??0);
+        $role=(int)($_POST['role_id']??0);
+        if(!$id||!$role)throw new RuntimeException('عضویت یا نقش نامعتبر است.');
+
+        $mst=pdo()->prepare("SELECT wm.*,wr.role_key current_role_key,u.email
+            FROM workspace_members wm
+            LEFT JOIN workspace_roles wr ON wr.id=wm.role_id
+            LEFT JOIN users u ON u.id=wm.user_id
+            WHERE wm.id=? AND wm.workspace_id=? LIMIT 1");
+        $mst->execute([$id,$wid]);$member=$mst->fetch();
+        if(!$member)throw new RuntimeException('عضویت در این Workspace پیدا نشد.');
+
+        $rst=pdo()->prepare("SELECT id,role_key,name FROM workspace_roles WHERE id=? AND workspace_id=? LIMIT 1");
+        $rst->execute([$role,$wid]);$targetRole=$rst->fetch();
+        if(!$targetRole)throw new RuntimeException('نقش انتخاب‌شده متعلق به این Workspace نیست.');
+
+        if(($member['current_role_key']==='owner' || $targetRole['role_key']==='owner') && !Tenant::isWorkspaceOwner()){
+            throw new RuntimeException('فقط مالک Workspace می‌تواند نقش Owner را واگذار یا تغییر دهد.');
+        }
+
+        if(Tenant::isMainWorkspace($wid) && (int)$member['user_id']!==(int)(Auth::user()['id']??0)){
+            throw new RuntimeException('عضویت محیط کاری اصلی قابل واگذاری به کاربران دیگر نیست.');
+        }
+
+        pdo()->prepare("UPDATE workspace_members SET role_id=?,updated_at=NOW() WHERE id=? AND workspace_id=?")
+            ->execute([$role,$id,$wid]);
+
+        Audit::log('member.role','workspace_members',$id,'تغییر نقش کاربر',null,[
+            'email'=>$member['email'],
+            'from'=>$member['current_role_key'],
+            'to'=>$targetRole['role_key']
+        ]);
+        flash('نقش کاربر به «'.$targetRole['name'].'» تغییر کرد.');
+        redirect('index.php?page=access');
     }
 
     private static function removeMember(): void
     {
-        Tenant::requirePermission('members.manage');$id=(int)($_POST['member_id']??0);if(!$id)throw new RuntimeException('عضویت نامعتبر است.');
-        $st=pdo()->prepare("SELECT wm.*,wr.role_key,u.email FROM workspace_members wm LEFT JOIN workspace_roles wr ON wr.id=wm.role_id LEFT JOIN users u ON u.id=wm.user_id WHERE wm.id=? AND wm.workspace_id=?");$st->execute([$id,Tenant::id()]);$m=$st->fetch();if(!$m)throw new RuntimeException('عضویت پیدا نشد.');
-        if((int)$m['user_id']===(int)Auth::user()['id'])throw new RuntimeException('برای جلوگیری از قفل شدن حساب، عضویت خودتان را از این صفحه حذف نکنید.');
-        if($m['role_key']==='owner'){
-            $st=pdo()->prepare("SELECT COUNT(*) FROM workspace_members wm JOIN workspace_roles wr ON wr.id=wm.role_id WHERE wm.workspace_id=? AND wm.status='active' AND wr.role_key='owner'");$st->execute([Tenant::id()]);if((int)$st->fetchColumn()<=1)throw new RuntimeException('آخرین مالک محیط کاری قابل حذف نیست.');
+        Tenant::requirePermission('members.manage');
+        $wid=Tenant::id();
+        $id=(int)($_POST['member_id']??0);
+        if(!$id)throw new RuntimeException('عضویت نامعتبر است.');
+
+        if(Tenant::isMainWorkspace($wid)){
+            throw new RuntimeException('عضویت محیط کاری اصلی از این صفحه قابل تغییر نیست.');
         }
-        pdo()->prepare("UPDATE workspace_members SET status='removed',updated_at=NOW() WHERE id=? AND workspace_id=?")->execute([$id,Tenant::id()]);Audit::log('member.remove','workspace_members',$id,'حذف عضویت',['email'=>$m['email']],null);redirect('index.php?page=access');
+
+        $st=pdo()->prepare("SELECT wm.*,wr.role_key,u.email
+            FROM workspace_members wm
+            LEFT JOIN workspace_roles wr ON wr.id=wm.role_id
+            LEFT JOIN users u ON u.id=wm.user_id
+            WHERE wm.id=? AND wm.workspace_id=?");
+        $st->execute([$id,$wid]);$m=$st->fetch();
+        if(!$m)throw new RuntimeException('عضویت پیدا نشد.');
+
+        if((int)$m['user_id']===(int)Auth::user()['id']){
+            throw new RuntimeException('برای جلوگیری از قفل شدن حساب، عضویت خودتان را حذف نکنید.');
+        }
+        if($m['role_key']==='owner' && !Tenant::isWorkspaceOwner()){
+            throw new RuntimeException('فقط مالک Workspace می‌تواند عضویت Owner دیگری را مدیریت کند.');
+        }
+
+        pdo()->prepare("UPDATE workspace_members SET status='removed',updated_at=NOW() WHERE id=? AND workspace_id=?")
+            ->execute([$id,$wid]);
+        Audit::log('member.remove','workspace_members',$id,'حذف عضویت',['email'=>$m['email'],'role_key'=>$m['role_key']],null);
+        flash('عضویت کاربر از همین Workspace حذف شد.');
+        redirect('index.php?page=access');
     }
 
     private static function saveRole(): void

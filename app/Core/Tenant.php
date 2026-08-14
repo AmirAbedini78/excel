@@ -101,11 +101,36 @@ final class Tenant
         if(!self::columnExists($pdo,'users','is_platform_admin')){
             $pdo->exec("ALTER TABLE users ADD COLUMN is_platform_admin TINYINT(1) NOT NULL DEFAULT 0");
         }
-        $count=(int)$pdo->query("SELECT COUNT(*) FROM users WHERE is_platform_admin=1")->fetchColumn();
-        if($count===0){
-            $id=$pdo->query("SELECT id FROM users WHERE role='admin' AND status='active' ORDER BY id LIMIT 1")->fetchColumn();
-            if(!$id)$id=$pdo->query("SELECT id FROM users WHERE status='active' ORDER BY id LIMIT 1")->fetchColumn();
-            if($id)$pdo->prepare("UPDATE users SET is_platform_admin=1 WHERE id=?")->execute([(int)$id]);
+
+        $ownerId=0;
+        try{
+            $st=$pdo->prepare("SELECT `value` FROM settings WHERE `key`='platform_owner_user_id' LIMIT 1");
+            $st->execute();
+            $candidate=(int)$st->fetchColumn();
+            if($candidate){
+                $chk=$pdo->prepare("SELECT id FROM users WHERE id=? AND status='active' LIMIT 1");
+                $chk->execute([$candidate]);
+                if($chk->fetchColumn())$ownerId=$candidate;
+            }
+        }catch(Throwable $e){}
+
+        if(!$ownerId){
+            $ownerId=(int)$pdo->query("SELECT id FROM users WHERE is_platform_admin=1 AND status='active' ORDER BY id LIMIT 1")->fetchColumn();
+        }
+        if(!$ownerId){
+            $ownerId=(int)$pdo->query("SELECT id FROM users WHERE role='admin' AND status='active' ORDER BY id LIMIT 1")->fetchColumn();
+        }
+        if(!$ownerId){
+            $ownerId=(int)$pdo->query("SELECT id FROM users WHERE status='active' ORDER BY id LIMIT 1")->fetchColumn();
+        }
+
+        if($ownerId){
+            // Exactly one global Platform Owner. Workspace Owner is NOT a platform-wide role.
+            $pdo->prepare("UPDATE users SET is_platform_admin=CASE WHEN id=? THEN 1 ELSE 0 END")->execute([$ownerId]);
+            try{
+                $pdo->prepare("INSERT INTO settings (`key`,`value`,`encrypted`,`updated_at`) VALUES ('platform_owner_user_id',?,0,NOW()) ON DUPLICATE KEY UPDATE `value`=VALUES(`value`),updated_at=NOW()")
+                    ->execute([(string)$ownerId]);
+            }catch(Throwable $e){}
         }
     }
 
@@ -184,35 +209,87 @@ final class Tenant
     private static function bootstrapExistingData(PDO $pdo): void
     {
         $count=(int)$pdo->query("SELECT COUNT(*) FROM workspaces")->fetchColumn();
+
+        $platformOwner=(int)$pdo->query("SELECT id FROM users WHERE is_platform_admin=1 AND status='active' ORDER BY id LIMIT 1")->fetchColumn();
+
         if($count===0){
-            $owner=$pdo->query("SELECT id FROM users WHERE role='admin' AND status='active' ORDER BY id LIMIT 1")->fetchColumn();
-            if(!$owner)$owner=$pdo->query("SELECT id FROM users WHERE status='active' ORDER BY id LIMIT 1")->fetchColumn();
             $slug='workspace-main';
             $pdo->prepare("INSERT INTO workspaces (name,slug,owner_user_id,status,plan_key,subscription_status,trial_ends_at,created_at,updated_at) VALUES (?,?,?,'active','pro','active',DATE_ADD(NOW(),INTERVAL 3650 DAY),NOW(),NOW())")
-                ->execute(['محیط کاری اصلی',$slug,$owner?:null]);
+                ->execute(['محیط کاری اصلی',$slug,$platformOwner?:null]);
         }
-        $wid=(int)$pdo->query("SELECT id FROM workspaces ORDER BY id LIMIT 1")->fetchColumn();
+
+        $st=$pdo->prepare("SELECT id,owner_user_id FROM workspaces WHERE slug='workspace-main' ORDER BY id LIMIT 1");
+        $st->execute();
+        $main=$st->fetch();
+        if(!$main){
+            $main=$pdo->query("SELECT id,owner_user_id FROM workspaces ORDER BY id LIMIT 1")->fetch();
+        }
+        if(!$main)return;
+
+        $wid=(int)$main['id'];
         self::seedDefaultRoles($pdo,$wid);
 
-        $ownerRole=self::roleId($pdo,$wid,'owner');
-        $accountantRole=self::roleId($pdo,$wid,'accountant');
-        $users=$pdo->query("SELECT id,role FROM users WHERE status='active'")->fetchAll();
-        $ins=$pdo->prepare("INSERT INTO workspace_members (workspace_id,user_id,role_id,status,joined_at,created_at,updated_at) VALUES (?,?,?,'active',NOW(),NOW(),NOW()) ON DUPLICATE KEY UPDATE status='active'");
-        foreach($users as $u)$ins->execute([$wid,(int)$u['id'],$u['role']==='admin'?$ownerRole:$accountantRole]);
+        if($platformOwner){
+            $ownerRole=self::roleId($pdo,$wid,'owner');
+            $pdo->prepare("UPDATE workspaces SET owner_user_id=?,updated_at=NOW() WHERE id=?")
+                ->execute([$platformOwner,$wid]);
 
-        foreach(['companies','daily_plans','monthly_plans','custom_fields','portal_credentials','user_table_preferences','activity_logs','imports','remote_services'] as $t){
-            if(table_exists($pdo,$t) && self::columnExists($pdo,$t,'workspace_id')){
-                try{$pdo->prepare("UPDATE `$t` SET workspace_id=? WHERE workspace_id IS NULL")->execute([$wid]);}catch(Throwable $e){}
-            }
+            // The main workspace is private to the Platform Owner.
+            $pdo->prepare("INSERT INTO workspace_members (workspace_id,user_id,role_id,status,joined_at,created_at,updated_at)
+                VALUES (?,?,?,'active',NOW(),NOW(),NOW())
+                ON DUPLICATE KEY UPDATE role_id=VALUES(role_id),status='active',updated_at=NOW()")
+                ->execute([$wid,$platformOwner,$ownerRole]);
+
+            $pdo->prepare("UPDATE workspace_members SET status='removed',updated_at=NOW()
+                WHERE workspace_id=? AND user_id<>? AND status='active'")
+                ->execute([$wid,$platformOwner]);
         }
 
-        $pdo->prepare("INSERT INTO settings (`key`,`value`,`encrypted`,`updated_at`) VALUES ('saas_schema_version','4.1.0',0,NOW()) ON DUPLICATE KEY UPDATE `value`='4.1.0',updated_at=NOW()")->execute();
+        // Legacy single-tenant data backfill must run ONCE only.
+        $legacyDone='0';
+        try{
+            $st=$pdo->prepare("SELECT `value` FROM settings WHERE `key`='saas_legacy_backfill_done' LIMIT 1");
+            $st->execute();$legacyDone=(string)($st->fetchColumn()?:'0');
+        }catch(Throwable $e){}
+
+        if($legacyDone!=='1'){
+            foreach(['companies','daily_plans','monthly_plans','custom_fields','portal_credentials','user_table_preferences','activity_logs','imports','remote_services'] as $t){
+                if(table_exists($pdo,$t) && self::columnExists($pdo,$t,'workspace_id')){
+                    try{$pdo->prepare("UPDATE `$t` SET workspace_id=? WHERE workspace_id IS NULL")->execute([$wid]);}catch(Throwable $e){}
+                }
+            }
+            try{
+                $pdo->prepare("INSERT INTO settings (`key`,`value`,`encrypted`,`updated_at`) VALUES ('saas_legacy_backfill_done','1',0,NOW()) ON DUPLICATE KEY UPDATE `value`='1',updated_at=NOW()")->execute();
+            }catch(Throwable $e){}
+        }
+
+        $pdo->prepare("INSERT INTO settings (`key`,`value`,`encrypted`,`updated_at`) VALUES ('saas_schema_version','4.2.0',0,NOW()) ON DUPLICATE KEY UPDATE `value`='4.2.0',updated_at=NOW()")->execute();
         $pdo->prepare("INSERT INTO settings (`key`,`value`,`encrypted`,`updated_at`) VALUES ('saas_self_service_workspace','0',0,NOW()) ON DUPLICATE KEY UPDATE `value`=`value`")->execute();
-        // V4_1_2_DURATION_CLEANUP
+
         try {
             $pdo->prepare("UPDATE custom_fields SET active=0,updated_at=NOW() WHERE workspace_id=? AND entity_key='daily_plans' AND field_key='duration'")
                 ->execute([$wid]);
         } catch (Throwable $e) {}
+    }
+
+    public static function mainWorkspaceId(): int
+    {
+        $st=pdo()->prepare("SELECT id FROM workspaces WHERE slug='workspace-main' LIMIT 1");
+        $st->execute();return (int)$st->fetchColumn();
+    }
+
+    public static function isMainWorkspace(?int $workspaceId=null): bool
+    {
+        $workspaceId=$workspaceId??self::id();
+        $main=self::mainWorkspaceId();
+        return $main>0 && $workspaceId===$main;
+    }
+
+    public static function isWorkspaceOwner(): bool
+    {
+        if(self::isPlatformAdmin())return true;
+        $m=self::membership();
+        return ($m['role_key']??'')==='owner';
     }
 
     public static function seedDefaultRoles(PDO $pdo,int $wid): void
@@ -390,9 +467,21 @@ final class Tenant
     public static function allWorkspaces(): array
     {
         if(!self::isPlatformAdmin())throw new RuntimeException('دسترسی مدیر کل لازم است.');
-        return pdo()->query("SELECT w.*,u.name owner_name,u.email owner_email,
+        return pdo()->query("SELECT w.*,u.name owner_name,u.email owner_email,u.is_platform_admin owner_is_platform_admin,
+            (SELECT wr.name
+             FROM workspace_members wm
+             LEFT JOIN workspace_roles wr ON wr.id=wm.role_id
+             WHERE wm.workspace_id=w.id AND wm.user_id=w.owner_user_id AND wm.status='active'
+             LIMIT 1) owner_role_name,
+            (SELECT wr.role_key
+             FROM workspace_members wm
+             LEFT JOIN workspace_roles wr ON wr.id=wm.role_id
+             WHERE wm.workspace_id=w.id AND wm.user_id=w.owner_user_id AND wm.status='active'
+             LIMIT 1) owner_role_key,
             (SELECT COUNT(*) FROM workspace_members wm WHERE wm.workspace_id=w.id AND wm.status='active') member_count
-            FROM workspaces w LEFT JOIN users u ON u.id=w.owner_user_id ORDER BY w.id DESC")->fetchAll();
+            FROM workspaces w
+            LEFT JOIN users u ON u.id=w.owner_user_id
+            ORDER BY w.id DESC")->fetchAll();
     }
 
     public static function workspaceRoleId(int $workspaceId,string $roleKey): int

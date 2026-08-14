@@ -17,7 +17,7 @@
   if(window.V4_WORKSPACES&&Array.isArray(window.V4_WORKSPACES)&&window.V4_WORKSPACES.length){
     const actions=document.querySelector('.top-actions');if(actions&&!actions.querySelector('.workspace-switcher')){
       const form=document.createElement('form');form.method='post';form.className='workspace-switcher';
-      form.innerHTML=`<input type="hidden" name="csrf" value="${window.CSRF||''}"><input type="hidden" name="action" value="v4_switch_workspace"><select name="workspace_id" aria-label="محیط کاری">${window.V4_WORKSPACES.map(w=>`<option value="${w.workspace_id}" ${String(w.workspace_id)===String(window.V4_WORKSPACE_ID)?'selected':''}>${String(w.workspace_name).replace(/[&<>"]/g,'')}</option>`).join('')}</select>`;
+      form.innerHTML=`<input type="hidden" name="csrf" value="${window.CSRF||''}"><input type="hidden" name="action" value="v4_switch_workspace"><select name="workspace_id" aria-label="محیط کاری">${window.V4_WORKSPACES.map(w=>`<option value="${w.workspace_id}" ${String(w.workspace_id)===String(window.V4_WORKSPACE_ID)?'selected':''}>${String(w.workspace_name).replace(/[&<>"]/g,'')}${w.role_name?` — ${String(w.role_name).replace(/[&<>"]/g,'')}`:``}</option>`).join('')}</select>`;
       form.querySelector('select').addEventListener('change',()=>form.submit());actions.prepend(form);
     }
   }
