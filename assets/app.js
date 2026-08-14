@@ -671,3 +671,148 @@
     };
   });
 })();
+
+/* Accounting CRM V3.3 responsive UX + API manager */
+(function(){
+  if(window.__ACCOUNTING_V33__)return;
+  window.__ACCOUNTING_V33__=true;
+  const qsa=(s,r=document)=>Array.from(r.querySelectorAll(s));
+
+  /* Mobile/off-canvas sidebar */
+  const sidebar=document.querySelector('.sidebar');
+  const topbar=document.querySelector('.topbar');
+  if(sidebar&&topbar){
+    const toggle=document.createElement('button');
+    toggle.type='button';toggle.className='mobile-menu-toggle';toggle.setAttribute('aria-label','باز کردن منو');toggle.setAttribute('aria-expanded','false');
+    toggle.innerHTML='<span></span><span></span><span></span>';
+    topbar.prepend(toggle);
+    const overlay=document.createElement('button');
+    overlay.type='button';overlay.className='sidebar-overlay';overlay.setAttribute('aria-label','بستن منو');
+    document.body.append(overlay);
+    const setOpen=open=>{
+      sidebar.classList.toggle('is-open',open);overlay.classList.toggle('is-open',open);document.body.classList.toggle('sidebar-open',open);
+      toggle.setAttribute('aria-expanded',open?'true':'false');
+    };
+    toggle.addEventListener('click',()=>setOpen(!sidebar.classList.contains('is-open')));
+    overlay.addEventListener('click',()=>setOpen(false));
+    qsa('a',sidebar).forEach(a=>a.addEventListener('click',()=>{if(innerWidth<=900)setOpen(false)}));
+    document.addEventListener('keydown',e=>{if(e.key==='Escape')setOpen(false)});
+    addEventListener('resize',()=>{if(innerWidth>900)setOpen(false)});
+  }
+
+  /* Smart-list settings panel: mark gear and add mobile backdrop */
+  let settingsBackdrop=null;
+  function closeSettingsPanel(){
+    qsa('.table-settings-panel').forEach(p=>p.hidden=true);
+    settingsBackdrop?.classList.remove('is-open');
+    document.body.classList.remove('table-settings-open');
+  }
+  function ensureSettingsBackdrop(){
+    if(settingsBackdrop)return settingsBackdrop;
+    settingsBackdrop=document.createElement('button');settingsBackdrop.type='button';settingsBackdrop.className='table-settings-backdrop';settingsBackdrop.setAttribute('aria-label','بستن تنظیم ستون‌ها');
+    settingsBackdrop.addEventListener('click',closeSettingsPanel);document.body.append(settingsBackdrop);return settingsBackdrop;
+  }
+  const markPanels=()=>{
+    qsa('.table-settings-panel').forEach(panel=>{
+      const toolbar=panel.closest('.list-toolbar');if(!toolbar)return;
+      qsa('button',toolbar).forEach(b=>{if((b.textContent||'').includes('⚙'))b.classList.add('v33-gear-button')});
+    });
+  };
+  markPanels();
+  new MutationObserver(markPanels).observe(document.body,{childList:true,subtree:true});
+  document.addEventListener('click',e=>{
+    const button=e.target.closest('.v33-gear-button');
+    if(!button)return;
+    setTimeout(()=>{
+      const panel=button.closest('.list-toolbar')?.querySelector('.table-settings-panel');
+      if(panel&&!panel.hidden&&innerWidth<=760){
+        ensureSettingsBackdrop().classList.add('is-open');document.body.classList.add('table-settings-open');
+      }else{
+        settingsBackdrop?.classList.remove('is-open');document.body.classList.remove('table-settings-open');
+      }
+    },20);
+  },true);
+
+  /* Calendar modal: accessible responsive dialog / bottom sheet */
+  const cal=document.getElementById('calendarModal');
+  if(cal){
+    cal.classList.add('v33-calendar-backdrop');
+    const dialog=cal.querySelector('.calendar-modal');dialog?.classList.add('v33-calendar-modal');
+    let previousFocus=null;
+    const sync=()=>{
+      const open=!cal.hidden;
+      document.body.classList.toggle('calendar-modal-open',open);
+      if(open){
+        previousFocus=document.activeElement;
+        setTimeout(()=>cal.querySelector('[data-close-calendar],button,a,input,select')?.focus(),10);
+      }else if(previousFocus&&previousFocus.focus){try{previousFocus.focus()}catch(e){}}
+    };
+    new MutationObserver(sync).observe(cal,{attributes:true,attributeFilter:['hidden']});sync();
+    cal.addEventListener('keydown',e=>{
+      if(e.key!=='Tab'||cal.hidden)return;
+      const items=qsa('button:not([disabled]),a[href],input:not([disabled]),select:not([disabled]),textarea:not([disabled])',cal).filter(x=>x.offsetParent!==null);
+      if(items.length<2)return;
+      const first=items[0],last=items[items.length-1];
+      if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}
+      else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}
+    });
+  }
+
+  /* API management card in Settings */
+  const page=new URLSearchParams(location.search).get('page');
+  if(page==='settings'){
+    const main=document.querySelector('.main');
+    const card=document.createElement('section');card.className='card api-manager-card';
+    card.innerHTML='<div class="section-title"><div><h2>API و اتصال سرویس‌ها</h2><div class="muted">Bearer Token، CORS و محدودیت درخواست برای Hermes / RAG / Agent</div></div><a class="btn tiny" href="api_docs.php">مستندات API</a></div><div class="api-manager-loading">در حال بارگذاری...</div>';
+    main?.append(card);
+    const apiPost=async data=>{
+      const r=await fetch('api_token_admin.php',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8'},body:new URLSearchParams(Object.assign({csrf:window.CSRF||''},data))});
+      const j=await r.json();if(!r.ok||j.ok===false)throw new Error(j.error||'خطا');return j;
+    };
+    const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    const load=async()=>{
+      const r=await fetch('api_token_admin.php?action=list');const j=await r.json();
+      if(!r.ok||j.ok===false){card.innerHTML='<div class="muted">مدیریت API فقط برای کاربر مدیر در دسترس است.</div>';return;}
+      render(j);
+    };
+    function render(j){
+      const s=j.settings||{},tokens=j.tokens||[];
+      card.innerHTML=`<div class="section-title"><div><h2>API و اتصال سرویس‌ها</h2><div class="muted">توکن‌ها در دیتابیس Hash می‌شوند و متن کامل فقط هنگام ساخت نمایش داده می‌شود.</div></div><div class="api-doc-actions"><a class="btn tiny" href="api_docs.php">راهنمای API</a><a class="btn tiny" href="openapi.json" target="_blank">OpenAPI</a></div></div>
+      <div class="api-settings-grid">
+        <label class="check api-switch"><input type="checkbox" data-api-enabled ${s.enabled==='1'?'checked':''}> API فعال باشد</label>
+        <label>Rate limit / دقیقه<input type="number" min="10" max="5000" data-api-rate value="${esc(s.rate_limit||120)}"></label>
+        <label class="api-cors-field">CORS Origins<textarea data-api-cors placeholder="https://agent.example.com&#10;https://hermes.example.com">${esc(s.cors_origins||'')}</textarea></label>
+        <button type="button" class="btn primary tiny" data-save-api-settings>ذخیره تنظیمات API</button>
+      </div>
+      <div class="api-base"><span>Base URL</span><code>${esc(s.base_url||'')}</code><button type="button" class="btn tiny" data-copy-base>کپی</button></div>
+      <div class="api-token-create">
+        <input data-token-name placeholder="نام توکن؛ مثلا Hermes Production">
+        <select data-token-preset><option value="read">فقط خواندن</option><option value="readwrite" selected>خواندن + نوشتن</option><option value="full">کامل + secrets + settings</option></select>
+        <input type="number" data-token-days min="0" max="3650" value="365" title="روز اعتبار؛ صفر یعنی بدون انقضا">
+        <button type="button" class="btn primary" data-create-token>ساخت توکن</button>
+      </div>
+      <div class="api-new-token" hidden></div>
+      <div class="table-wrap"><table class="api-token-table"><thead><tr><th>نام</th><th>Prefix</th><th>Scope</th><th>آخرین استفاده</th><th>انقضا</th><th>وضعیت</th><th>عملیات</th></tr></thead><tbody>
+      ${tokens.map(t=>`<tr><td>${esc(t.name)}</td><td dir="ltr">${esc(t.token_prefix)}...</td><td>${(t.scopes||[]).map(x=>`<span class="api-scope">${esc(x)}</span>`).join(' ')}</td><td>${esc(t.last_used_at||'—')}</td><td>${esc(t.expires_at||'بدون انقضا')}</td><td>${t.revoked_at?'<span class="api-revoked">لغوشده</span>':'فعال'}</td><td>${t.revoked_at?'—':`<button class="btn tiny danger-soft" data-revoke-token="${t.id}">لغو</button>`}</td></tr>`).join('')}
+      </tbody></table></div>`;
+
+      card.querySelector('[data-copy-base]')?.addEventListener('click',()=>navigator.clipboard?.writeText(s.base_url||''));
+      card.querySelector('[data-save-api-settings]')?.addEventListener('click',async b=>{
+        b.disabled=true;try{await apiPost({action:'save_settings',enabled:card.querySelector('[data-api-enabled]').checked?'1':'0',rate_limit:card.querySelector('[data-api-rate]').value,cors_origins:card.querySelector('[data-api-cors]').value});b.textContent='ذخیره شد';setTimeout(()=>b.textContent='ذخیره تنظیمات API',1100);}catch(e){alert(e.message)}finally{b.disabled=false}
+      });
+      card.querySelector('[data-create-token]')?.addEventListener('click',async b=>{
+        const name=card.querySelector('[data-token-name]').value.trim();if(!name){alert('نام توکن را وارد کنید.');return;}
+        b.disabled=true;try{
+          const out=await apiPost({action:'create',name,preset:card.querySelector('[data-token-preset]').value,expires_days:card.querySelector('[data-token-days]').value});
+          await load();
+          const n=card.querySelector('.api-new-token');n.hidden=false;n.innerHTML=`<b>توکن جدید — فقط همین یک بار نمایش داده می‌شود:</b><div><code>${esc(out.token.token)}</code><button type="button" class="btn tiny" data-copy-token>کپی</button></div><small>بعد از کپی، این مقدار را در Secret Manager سرویس مقصد ذخیره کنید.</small>`;
+          n.querySelector('[data-copy-token]').onclick=()=>navigator.clipboard?.writeText(out.token.token);
+        }catch(e){alert(e.message)}finally{b.disabled=false}
+      });
+      qsa('[data-revoke-token]',card).forEach(b=>b.addEventListener('click',async()=>{
+        if(!confirm('این توکن فوراً لغو شود؟'))return;b.disabled=true;try{await apiPost({action:'revoke',id:b.dataset.revokeToken});await load()}catch(e){alert(e.message);b.disabled=false}
+      }));
+    }
+    load().catch(()=>{card.innerHTML='<div class="muted">خطا در بارگذاری مدیریت API.</div>'});
+  }
+})();

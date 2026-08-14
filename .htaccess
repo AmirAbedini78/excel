@@ -3,6 +3,11 @@ DirectoryIndex index.php
 
 <IfModule mod_rewrite.c>
 RewriteEngine On
+
+# Accounting CRM API V1
+RewriteRule ^api/v1/?$ api_v1.php [L,QSA]
+RewriteRule ^api/v1/([A-Za-z0-9_-]+)/([0-9]+)/?$ api_v1.php?resource=$1&id=$2 [L,QSA]
+RewriteRule ^api/v1/([A-Za-z0-9_-]+)/?$ api_v1.php?resource=$1 [L,QSA]
 RewriteCond %{REQUEST_FILENAME} !-f
 RewriteCond %{REQUEST_FILENAME} !-d
 RewriteRule ^ index.php [L,QSA]

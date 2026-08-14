@@ -9,6 +9,10 @@ deployment:
     - /bin/cp -R sample_import $DEPLOYPATH
     - /bin/cp .htaccess $DEPLOYPATH
     - /bin/cp index.php $DEPLOYPATH
+    - /bin/cp openapi.json $DEPLOYPATH
+    - /bin/cp api_docs.php $DEPLOYPATH
+    - /bin/cp api_token_admin.php $DEPLOYPATH
+    - /bin/cp api_v1.php $DEPLOYPATH
     - /bin/cp io.php $DEPLOYPATH
     - /bin/cp v3_2_api.php $DEPLOYPATH
     - /bin/cp install.php $DEPLOYPATH

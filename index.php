@@ -401,7 +401,7 @@ function render_header(string $title, string $subtitle=''): void
     ?><!doctype html><html lang="fa" dir="rtl"><head>
     <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
     <title><?=h($title)?> - Accounting CRM</title>
-    <link rel="stylesheet" href="assets/style.css?v=3.1">
+    <link rel="stylesheet" href="assets/style.css?v=3.3">
     </head><body><div class="app">
     <aside class="sidebar compact"><div class="brand">Accounting CRM<span>سامانه سبک حسابداران</span></div><nav>
     <?php foreach($nav as $k=>$v): ?><a class="<?=($_GET['page']??'dashboard')===$k?'active':''?>" href="index.php?page=<?=$k?>"><?=h($v)?></a><?php endforeach; ?>
@@ -411,7 +411,7 @@ function render_header(string $title, string $subtitle=''): void
     <form method="post" class="inline-form"><?=csrf_field()?><input type="hidden" name="action" value="logout"><button class="btn tiny" type="submit">خروج</button></form></div></header>
     <?php foreach(flashes() as $f): ?><div class="alert <?=h($f['type'])?>"><?=h($f['msg'])?></div><?php endforeach; ?><?php
 }
-function render_footer(): void { ?></main></div><script>window.CSRF='<?=h(csrf_token())?>';window.JALALI_TODAY='<?=h(Jalali::today())?>';</script><script src="assets/app.js?v=3.1"></script></body></html><?php }
+function render_footer(): void { ?></main></div><script>window.CSRF='<?=h(csrf_token())?>';window.JALALI_TODAY='<?=h(Jalali::today())?>';</script><script src="assets/app.js?v=3.3"></script></body></html><?php }
 
 if ($page === 'login') { render_login(); exit; }
 Auth::require();
@@ -428,13 +428,13 @@ else render_calendar();
 
 function render_login(): void
 {
-    ?><!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ورود</title><link rel="stylesheet" href="assets/style.css?v=3.1"></head>
+    ?><!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ورود</title><link rel="stylesheet" href="assets/style.css?v=3.3"></head>
     <body class="login-page"><main class="login-card"><h1>ورود به سامانه حسابداران</h1><p>تقویم کاری، شرکت‌ها، سامانه‌ها و برنامه‌های حسابداری</p>
     <?php foreach(flashes() as $f): ?><div class="alert <?=h($f['type'])?>"><?=h($f['msg'])?></div><?php endforeach; ?>
     <form method="post" class="grid-form autosave" data-form-key="login"><?=csrf_field()?><input type="hidden" name="action" value="login">
     <label>ایمیل<input type="email" name="email" required></label><label>رمز عبور<input type="password" name="password" required></label>
     <button class="btn primary" type="submit">ورود</button><a class="btn google" href="index.php?page=google_start">ورود یا ثبت‌نام با گوگل</a></form></main>
-    <script src="assets/app.js?v=3.1"></script></body></html><?php
+    <script src="assets/app.js?v=3.3"></script></body></html><?php
 }
 function render_calendar(): void
 {
