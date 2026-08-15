@@ -205,6 +205,15 @@ final class Tenant
             ['phonebook.view','مشاهده دفترچه تلفن','phonebook',160],['phonebook.create','ثبت تماس و پیگیری','phonebook',161],['phonebook.update','ویرایش تماس و پیگیری','phonebook',162],['phonebook.delete','حذف تماس و پیگیری','phonebook',163],
             ['shares.view','مشاهده داده‌های اشتراکی','shares',170],['shares.manage','اشتراک‌گذاری داده با محیط دیگر','shares',171],
             ['cache.manage','مدیریت کش و عملکرد','performance',180],
+            ['accounting.view','مشاهده ماژول حسابداری صنعتی','accounting',200],
+            ['accounting.master.manage','مدیریت اطلاعات پایه حسابداری','accounting',201],
+            ['accounting.purchase.view','مشاهده خرید','accounting',202],['accounting.purchase.manage','مدیریت خرید','accounting',203],
+            ['accounting.vouchers.view','مشاهده اسناد حسابداری','accounting',204],['accounting.vouchers.manage','مدیریت اسناد حسابداری','accounting',205],
+            ['accounting.production.view','مشاهده حسابداری صنعتی','accounting',206],['accounting.production.manage','مدیریت حسابداری صنعتی','accounting',207],
+            ['accounting.treasury.view','مشاهده خزانه داری مالی','accounting',208],['accounting.treasury.manage','مدیریت خزانه داری مالی','accounting',209],
+            ['accounting.reports.view','مشاهده گزارش های مالی','accounting',210],
+            ['accounting.settings.manage','مدیریت تنظیمات ماژول حسابداری','accounting',211],
+            ['accounting.taxkeys.manage','مدیریت کلیدهای سامانه مودیان','accounting',212],
         ];
         $st=$pdo->prepare("INSERT INTO workspace_permissions (permission_key,title,group_key,sort_order) VALUES (?,?,?,?) ON DUPLICATE KEY UPDATE title=VALUES(title),group_key=VALUES(group_key),sort_order=VALUES(sort_order)");
         foreach($defs as $d)$st->execute($d);
@@ -307,7 +316,7 @@ final class Tenant
         $sets=[
             'owner'=>array_keys($byKey),
             'workspace_admin'=>array_values(array_filter(array_keys($byKey),fn($x)=>!in_array($x,['billing.manage'],true))),
-            'manager'=>array_values(array_filter(array_keys($byKey),fn($x)=>!in_array($x,['billing.manage','workspace.manage','members.manage','settings.manage','api.manage','shares.manage','cache.manage'],true))),
+            'manager'=>array_values(array_filter(array_keys($byKey),fn($x)=>!in_array($x,['billing.manage','workspace.manage','members.manage','settings.manage','api.manage','shares.manage','cache.manage','accounting.settings.manage','accounting.taxkeys.manage'],true))),
             'accountant'=>array_values(array_filter(array_keys($byKey),fn($x)=>preg_match('/^(dashboard|companies|systems|daily|monthly|kanban|notes|files|phonebook)\./',$x) || $x==='shares.view')),
             'viewer'=>array_values(array_filter(array_keys($byKey),fn($x)=>str_ends_with($x,'.view'))),
         ];

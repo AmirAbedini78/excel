@@ -73,3 +73,52 @@ function table_exists(PDO $pdo, string $table): bool
     $st->execute([$table]);
     return (bool)$st->fetchColumn();
 }
+
+function enforce_data_persistence_guard(): void
+{
+    // ENCRYPTION_KEY_PERSISTENCE_GUARD_V6_0_4
+    // The current app_key becomes the identity of all encrypted runtime credentials.
+    // After the first guarded deployment, changing app_key is blocked.
+    $key=(string)(app_config()['app_key']??'');
+    if($key==='') throw new RuntimeException('app_key خالی است؛ ذخیره یا نمایش Credentialها ایمن نیست.');
+
+    $fingerprint=hash('sha256',$key);
+
+    try{
+        $st=pdo()->prepare(
+            "SELECT `value` FROM settings
+             WHERE `key`='encryption_key_fingerprint_v4'
+             LIMIT 1"
+        );
+        $st->execute();
+        $stored=(string)($st->fetchColumn()?:'');
+
+        if($stored===''){
+            pdo()->prepare(
+                "INSERT INTO settings (`key`,`value`,`encrypted`,`updated_at`)
+                 VALUES ('encryption_key_fingerprint_v4',?,0,NOW())
+                 ON DUPLICATE KEY UPDATE `value`=`value`"
+            )->execute([$fingerprint]);
+        }elseif(!hash_equals($stored,$fingerprint)){
+            throw new RuntimeException(
+                'app_key نسبت به کلیدی که Credentialهای سامانه‌ها با آن محافظت شده تغییر کرده است. '.
+                'فایل config.php صحیح را بازگردانید و هیچ رمز جدیدی ذخیره نکنید.'
+            );
+        }
+
+        // Persist installation state so future upgrades cannot replay demo/legacy migrations.
+        foreach([
+            'initial_sample_seed_done_v3'=>'1',
+            'legacy_portal_credentials_imported_v3'=>'1',
+            'data_persistence_guard_version'=>'6.0.4'
+        ] as $k=>$v){
+            pdo()->prepare(
+                "INSERT INTO settings (`key`,`value`,`encrypted`,`updated_at`)
+                 VALUES (?,?,0,NOW())
+                 ON DUPLICATE KEY UPDATE `value`=VALUES(`value`),updated_at=NOW()"
+            )->execute([$k,$v]);
+        }
+    }catch(PDOException $e){
+        // Only tolerated during a truly fresh bootstrap before settings exists.
+    }
+}

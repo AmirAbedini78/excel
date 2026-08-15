@@ -315,32 +315,106 @@ class Schema
 
     private static function migrateLegacySystems(PDO $pdo): void
     {
+        // DATA_PERSISTENCE_GUARD_V6_0_3
+        // Legacy credential migration is one-time and INSERT-ONLY.
+        // It must never overwrite credentials entered by a real user.
         try {
-            $st=$pdo->query("SELECT id,company_id,service_name,url,username,secret_note FROM systems");
-            $rows=$st->fetchAll(PDO::FETCH_ASSOC);
-            if(!$rows) return;
-            $defs=$pdo->query("SELECT portal_key,url FROM portal_definitions WHERE active=1")->fetchAll(PDO::FETCH_ASSOC);
-            $up=$pdo->prepare("INSERT INTO portal_credentials (company_id,portal_key,username,password_enc,created_at,updated_at) VALUES (?,?,?,?,NOW(),NOW()) ON DUPLICATE KEY UPDATE username=COALESCE(NULLIF(VALUES(username),''),username),password_enc=COALESCE(NULLIF(VALUES(password_enc),''),password_enc),updated_at=NOW()");
-            foreach($rows as $r){
-                if(empty($r['company_id'])) continue;
-                $hay=mb_strtolower(trim(($r['url']??'').' '.($r['service_name']??'')));
-                $key=null;
-                foreach($defs as $d){
-                    $host=parse_url($d['url'],PHP_URL_HOST) ?: $d['url'];
-                    if($host && str_contains($hay,mb_strtolower($host))){$key=$d['portal_key'];break;}
+            $st=$pdo->prepare("SELECT `value` FROM settings WHERE `key`='legacy_portal_credentials_imported_v3' LIMIT 1");
+            $st->execute();
+            if((string)($st->fetchColumn()?:'0')==='1') return;
+
+            $hasWorkspace=false;
+            $st=$pdo->prepare("SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA=DATABASE()
+                  AND TABLE_NAME IN ('companies','portal_credentials')
+                  AND COLUMN_NAME='workspace_id'");
+            $st->execute();
+            $hasWorkspace=((int)$st->fetchColumn()>=2);
+
+            $sql=$hasWorkspace
+                ? "SELECT s.id,s.company_id,s.service_name,s.url,s.username,s.secret_note,c.workspace_id
+                     FROM systems s
+                     LEFT JOIN companies c ON c.id=s.company_id"
+                : "SELECT id,company_id,service_name,url,username,secret_note,NULL workspace_id FROM systems";
+            $rows=$pdo->query($sql)->fetchAll(PDO::FETCH_ASSOC);
+
+            if($rows){
+                $defs=$pdo->query("SELECT portal_key,url FROM portal_definitions WHERE active=1")
+                    ->fetchAll(PDO::FETCH_ASSOC);
+
+                if($hasWorkspace){
+                    $ins=$pdo->prepare("INSERT INTO portal_credentials
+                        (workspace_id,company_id,portal_key,username,password_enc,created_at,updated_at)
+                        VALUES (?,?,?,?,?,NOW(),NOW())
+                        ON DUPLICATE KEY UPDATE id=id");
+                }else{
+                    $ins=$pdo->prepare("INSERT INTO portal_credentials
+                        (company_id,portal_key,username,password_enc,created_at,updated_at)
+                        VALUES (?,?,?,?,NOW(),NOW())
+                        ON DUPLICATE KEY UPDATE id=id");
                 }
-                if(!$key) continue;
-                $pw=trim((string)($r['secret_note']??''));
-                $stored=$pw!=='' ? encrypt_value($pw) : '';
-                $up->execute([(int)$r['company_id'],$key,trim((string)($r['username']??'')),$stored]);
+
+                foreach($rows as $r){
+                    if(empty($r['company_id'])) continue;
+                    $hay=mb_strtolower(trim(($r['url']??'').' '.($r['service_name']??'')));
+                    $key=null;
+                    foreach($defs as $d){
+                        $host=parse_url($d['url'],PHP_URL_HOST) ?: $d['url'];
+                        if($host && str_contains($hay,mb_strtolower($host))){
+                            $key=$d['portal_key']; break;
+                        }
+                    }
+                    if(!$key) continue;
+
+                    $pw=trim((string)($r['secret_note']??''));
+                    // Old prose/placeholders are not passwords.
+                    $placeholder=(bool)preg_match('/(به\s*عهده|کاربر|وارد\s*کنید|ثبت\s*شود|نامشخص|ندارد|بعدا|بعداً)/u',$pw);
+                    $stored=(!$placeholder && $pw!=='') ? encrypt_value($pw) : '';
+
+                    if($hasWorkspace){
+                        $ins->execute([
+                            (int)($r['workspace_id']??0)?:null,
+                            (int)$r['company_id'],
+                            $key,
+                            trim((string)($r['username']??'')),
+                            $stored
+                        ]);
+                    }else{
+                        $ins->execute([
+                            (int)$r['company_id'],
+                            $key,
+                            trim((string)($r['username']??'')),
+                            $stored
+                        ]);
+                    }
+                }
             }
-        } catch(Throwable $e) {}
+
+            $pdo->prepare("INSERT INTO settings (`key`,`value`,`encrypted`,`updated_at`)
+                VALUES ('legacy_portal_credentials_imported_v3','1',0,NOW())
+                ON DUPLICATE KEY UPDATE `value`='1',updated_at=NOW()")->execute();
+        } catch(Throwable $e) {
+            // Legacy conversion must never take the application down.
+        }
     }
 
     private static function seedV2(PDO $pdo): void
     {
-        $count = (int)$pdo->query("SELECT COUNT(*) FROM companies")->fetchColumn();
-        if ($count === 0) {
+        // DATA_PERSISTENCE_GUARD_SAMPLE_SEED_V6_0_3
+        // Sample data may exist only during the very first empty installation.
+        $done='0';
+        try{
+            $st=$pdo->prepare("SELECT `value` FROM settings WHERE `key`='initial_sample_seed_done_v3' LIMIT 1");
+            $st->execute();$done=(string)($st->fetchColumn()?:'0');
+        }catch(Throwable $e){}
+        if($done==='1') return;
+
+        $hasBusinessData=0;
+        foreach(['companies','daily_plans','monthly_plans'] as $table){
+            try{$hasBusinessData+=(int)$pdo->query("SELECT COUNT(*) FROM `$table`")->fetchColumn();}catch(Throwable $e){}
+        }
+
+        if($hasBusinessData===0){
             $companies = [
                 ['موسسه شهر کتاب مرکزی','موسسه','حقوقی','سپیدار'],
                 ['فروشگاه شهر کتاب مرکزی','فروشگاه','حقوقی','سپیدار'],
@@ -348,12 +422,20 @@ class Schema
                 ['کیوان الکترونیک ایرانیان','شرکت','حقوقی','سپیدار'],
                 ['کیهان توسعه البرز','شرکت','حقوقی','سپیدار'],
             ];
-            $st=$pdo->prepare("INSERT INTO companies (name,type,company_type,legal_personality,software,notes,active,created_at,updated_at) VALUES (?,?,?,?,?,'داده اولیه سامانه حسابداران',1,NOW(),NOW())");
-            foreach ($companies as $c) $st->execute([$c[0],$c[1],$c[1],$c[2],$c[3]]);
+            $st=$pdo->prepare("INSERT INTO companies
+                (name,type,company_type,legal_personality,software,notes,active,created_at,updated_at)
+                VALUES (?,?,?,?,?,'داده اولیه سامانه حسابداران',1,NOW(),NOW())");
+            foreach($companies as $c)$st->execute([$c[0],$c[1],$c[1],$c[2],$c[3]]);
+            self::seedMonthlyPlans($pdo);
+            self::seedDailyPlans($pdo);
+            self::seedCustomFields($pdo);
         }
-        self::seedMonthlyPlans($pdo);
-        self::seedDailyPlans($pdo);
-        self::seedCustomFields($pdo);
+
+        try{
+            $pdo->prepare("INSERT INTO settings (`key`,`value`,`encrypted`,`updated_at`)
+                VALUES ('initial_sample_seed_done_v3','1',0,NOW())
+                ON DUPLICATE KEY UPDATE `value`='1',updated_at=NOW()")->execute();
+        }catch(Throwable $e){}
     }
 
     private static function companyIds(PDO $pdo): array

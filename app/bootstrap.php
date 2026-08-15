@@ -23,6 +23,8 @@ require_once APP_ROOT . '/app/Core/Audit.php';
 require_once APP_ROOT . '/app/Core/FileLibrary.php';
 require_once APP_ROOT . '/app/Core/Sharing.php';
 require_once APP_ROOT . '/app/Core/V5Schema.php';
+require_once APP_ROOT . '/app/Core/AccountingSchema.php';
+require_once APP_ROOT . '/app/Core/AccountingRepository.php';
 require_once APP_ROOT . '/app/Core/Xlsx.php';
 
 if (file_exists($configFile)) {
@@ -39,8 +41,11 @@ if (file_exists($configFile)) {
         Audit::ensureSchema();
         FileLibrary::ensureSchema();
         V5Schema::migrate(pdo());
+        AccountingSchema::migrate(pdo());
         RuntimeCache::markSchema(RuntimeCache::SCHEMA_VERSION);
     }
+
+    enforce_data_persistence_guard();
 
     if (Auth::check()) {
         Tenant::boot();
