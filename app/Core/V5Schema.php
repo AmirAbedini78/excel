@@ -191,7 +191,7 @@ final class V5Schema
             ['v5_ui_ajax','1'],
             ['saas_schema_version','5.0.0'],
         ];
-        $st=$pdo->prepare("INSERT INTO settings (`key`,`value`,`encrypted`,`updated_at)
+        $st=$pdo->prepare("INSERT INTO settings (`key`,`value`,`encrypted`,`updated_at`)
             VALUES (?,?,0,NOW()) ON DUPLICATE KEY UPDATE `value`=CASE WHEN `key`='saas_schema_version' THEN VALUES(`value`) ELSE `value` END,updated_at=NOW()");
         foreach($defaults as $d)$st->execute($d);
     }
