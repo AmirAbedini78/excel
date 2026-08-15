@@ -213,3 +213,27 @@ X-API-Version: 2
 ```text
 /openapi-v2.json
 ```
+
+## مقادیر انتخابی / Combo Boxها
+
+این Endpoint برای مدیریت Combo Boxهای Workspace است.
+
+- `GET /choices`
+- `GET /choices?set_key=monthly_work_type`
+- `POST /choices`
+- `PATCH /choices/{id}`
+- `PUT /choices/{id}`
+- `DELETE /choices/{id}`
+
+برای عملیات تغییر، User متصل به Token باید Permission `choices.manage` داشته باشد.
+
+نمونه افزودن:
+
+```bash
+curl -X POST "https://YOUR-DOMAIN/api/v2/choices" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"set_key":"monthly_work_type","value":"نوع کار جدید"}'
+```
+
+حذف در این بخش Soft Disable است؛ یعنی داده‌های قبلی حذف نمی‌شوند.

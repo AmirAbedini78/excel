@@ -1,6 +1,7 @@
 <?php
 require __DIR__ . '/app/bootstrap.php';
 require_once __DIR__.'/app/Modules/V4Module.php';
+require_once __DIR__.'/app/Modules/ChoiceModule.php';
 if (file_exists(__DIR__.'/app/config.php')) {
     try { Schema::migrate(pdo()); } catch (Throwable $e) { /* migrate page shows exact error */ }
 }
@@ -31,31 +32,21 @@ function company_options($selected=null, bool $all=false): string {
     return $html;
 }
 function status_options($selected='', bool $all=false): string {
-    $items=['باز','در حال انجام','منتظر مدارک','معوق','انجام شده','لغو شده'];
-    $html=$all?'<option value="">همه وضعیت‌ها</option>':'';
-    foreach($items as $x) $html.='<option '.($selected===$x?'selected':'').'>'.h($x).'</option>';
-    return $html;
+    return ChoiceRegistry::htmlOptions('monthly_status',(string)$selected,$all,'همه وضعیت‌ها',$all);
 }
 function month_options($selected='', bool $all=false): string {
-    $items=['فروردین','اردیبهشت','خرداد','تیر','مرداد','شهریور','مهر','آبان','آذر','دی','بهمن','اسفند','سالانه'];
-    $html=$all?'<option value="">همه ماه‌ها</option>':'';
-    foreach($items as $x) $html.='<option '.($selected===$x?'selected':'').'>'.h($x).'</option>';
-    return $html;
+    return ChoiceRegistry::htmlOptions('monthly_month',(string)$selected,$all,'همه ماه‌ها',$all);
 }
 function season_options($selected='', bool $all=false): string {
-    $items=['بهار','تابستان','پاییز','زمستان','سالانه'];
-    $html=$all?'<option value="">همه فصل‌ها</option>':'';
-    foreach($items as $x) $html.='<option '.($selected===$x?'selected':'').'>'.h($x).'</option>';
-    return $html;
+    return ChoiceRegistry::htmlOptions('monthly_season',(string)$selected,$all,'همه فصل‌ها',$all);
 }
 function work_types(): array {
-    return ['بانک‌ها','حقوق و دستمزد','بیمه تامین اجتماعی','مالیات حقوق','مودیان','دفاتر الکترونیکی','اجاره و حق امتیاز','اظهارنامه عملکرد','حق الزحمه'];
+    return ChoiceRegistry::labels('monthly_work_type','',true);
 }
 function work_type_options($selected='', bool $all=false): string {
-    $html=$all?'<option value="">همه نوع کارها</option>':'';
-    foreach(work_types() as $x) $html.='<option '.($selected===$x?'selected':'').'>'.h($x).'</option>';
-    return $html;
+    return ChoiceRegistry::htmlOptions('monthly_work_type',(string)$selected,$all,'همه نوع کارها',$all);
 }
+
 function portal_definitions(): array { return q("SELECT * FROM portal_definitions WHERE active=1 ORDER BY sort_order,id"); }
 function custom_fields(string $entity): array { return q("SELECT * FROM custom_fields WHERE workspace_id=? AND entity_key=? AND active=1 ORDER BY sort_order,id", [Tenant::id(),$entity]); }
 function extra_decode($json): array { if(!$json) return []; $a=json_decode((string)$json,true); return is_array($a)?$a:[]; }
@@ -194,6 +185,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     Auth::require(); verify_csrf();
     try {
         if (str_starts_with($action,'v4_')) V4Module::handle($action);
+        if (str_starts_with($action,'choice_')) ChoiceModule::handle($action);
         if ($action === 'inline_update') handle_inline_update();
         if ($action === 'delete_record') handle_delete_record();
         if ($action === 'save_company') handle_save_company();
@@ -411,6 +403,7 @@ function render_header(string $title, string $subtitle=''): void
         'monthly'=>'برنامه ماهانه',
         'daily'=>'برنامه روزانه',
         'custom_fields'=>'فیلدهای اضافه',
+        'choices'=>'مقادیر انتخابی',
         'kanban'=>'کانبان',
         'notes'=>'نوت‌ها',
         'library'=>'لایبرری',
@@ -418,14 +411,15 @@ function render_header(string $title, string $subtitle=''): void
         'platform'=>'مدیریت SaaS',
         'settings'=>'تنظیمات',
     ];
-    $navPerm=['dashboard'=>'dashboard.view','companies'=>'companies.view','systems'=>'systems.view','monthly'=>'monthly.view','daily'=>'daily.view','custom_fields'=>'custom_fields.manage','kanban'=>'kanban.view','notes'=>'notes.view','library'=>'files.view','access'=>'members.view','settings'=>'settings.manage'];
+    $navPerm=['dashboard'=>'dashboard.view','companies'=>'companies.view','systems'=>'systems.view','monthly'=>'monthly.view','daily'=>'daily.view','custom_fields'=>'custom_fields.manage',
+        'choices'=>'choices.manage','kanban'=>'kanban.view','notes'=>'notes.view','library'=>'files.view','access'=>'members.view','settings'=>'settings.manage'];
     foreach($navPerm as $nk=>$np) if(isset($nav[$nk]) && !Tenant::can($np)) unset($nav[$nk]);
     if(!Tenant::isPlatformAdmin()) unset($nav['platform']);
     if(!Tenant::isPlatformAdmin()) unset($nav['settings']);
     ?><!doctype html><html lang="fa" dir="rtl"><head>
     <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
     <title><?=h($title)?> - Accounting CRM</title>
-    <link rel="stylesheet" href="assets/style.css?v=4.1"><link rel="stylesheet" href="assets/v4.css?v=4.2">
+    <link rel="stylesheet" href="assets/style.css?v=4.1"><link rel="stylesheet" href="assets/v4.css?v=4.3"><link rel="stylesheet" href="assets/choices.css?v=4.3">
     </head><body><div class="app">
     <aside class="sidebar compact"><div class="brand">Accounting CRM<span>سامانه سبک حسابداران</span></div><nav>
     <?php foreach($nav as $k=>$v): ?><a class="<?=($_GET['page']??'dashboard')===$k?'active':''?>" href="index.php?page=<?=$k?>"><?=h($v)?></a><?php endforeach; ?>
@@ -435,12 +429,13 @@ function render_header(string $title, string $subtitle=''): void
     <form method="post" class="inline-form"><?=csrf_field()?><input type="hidden" name="action" value="logout"><button class="btn tiny" type="submit">خروج</button></form></div></header>
     <?php foreach(flashes() as $f): ?><div class="alert <?=h($f['type'])?>"><?=h($f['msg'])?></div><?php endforeach; ?><?php
 }
-function render_footer(): void { ?></main></div><script>window.CSRF='<?=h(csrf_token())?>';window.JALALI_TODAY='<?=h(Jalali::today())?>';window.V4_WORKSPACE_ID=<?=Tenant::id()?>;window.V4_WORKSPACES=<?=json_encode(Tenant::workspaceOptions(),JSON_UNESCAPED_UNICODE|JSON_HEX_TAG|JSON_HEX_AMP)?>;</script><script src="assets/app.js?v=4.1"></script><script src="assets/v4.js?v=4.2"></script></body></html><?php }
+function render_footer(): void { ?></main></div><script>window.CSRF='<?=h(csrf_token())?>';window.JALALI_TODAY='<?=h(Jalali::today())?>';window.V4_WORKSPACE_ID=<?=Tenant::id()?>;window.V4_WORKSPACES=<?=json_encode(Tenant::workspaceOptions(),JSON_UNESCAPED_UNICODE|JSON_HEX_TAG|JSON_HEX_AMP)?>;</script><script src="assets/app.js?v=4.1"></script><script src="assets/v4.js?v=4.3"></script></body></html><?php }
 
 if ($page === 'login') { render_login(); exit; }
 Auth::require(); Tenant::boot(); V4Module::ensureSchema();
 if($_SERVER['REQUEST_METHOD']==='GET' && $page!=='login') Audit::log('page.view','page',0,$page);
-$pagePermission=['dashboard'=>'dashboard.view','companies'=>'companies.view','systems'=>'systems.view','monthly'=>'monthly.view','daily'=>'daily.view','kanban'=>'kanban.view','custom_fields'=>'custom_fields.manage','settings'=>'settings.manage'];
+$pagePermission=['dashboard'=>'dashboard.view','companies'=>'companies.view','systems'=>'systems.view','monthly'=>'monthly.view','daily'=>'daily.view','kanban'=>'kanban.view','custom_fields'=>'custom_fields.manage',
+        'choices'=>'choices.manage','settings'=>'settings.manage'];
 if(isset($pagePermission[$page])) Tenant::requirePermission($pagePermission[$page]);
 if($page==='settings' && !Tenant::isPlatformAdmin()) { http_response_code(403); throw new RuntimeException('تنظیمات زیرساخت فقط برای مدیر کل پلتفرم در دسترس است.'); }
 
@@ -450,6 +445,7 @@ elseif($page === 'systems') render_systems();
 elseif($page === 'monthly') render_monthly();
 elseif($page === 'daily') render_daily();
 elseif($page === 'custom_fields') render_custom_fields();
+elseif($page === 'choices') ChoiceModule::render();
 elseif($page === 'kanban') render_kanban();
 elseif($page === 'notes') V4Module::renderNotes();
 elseif($page === 'library') V4Module::renderLibrary();
@@ -460,13 +456,13 @@ else render_calendar();
 
 function render_login(): void
 {
-    ?><!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ورود</title><link rel="stylesheet" href="assets/style.css?v=4.1"><link rel="stylesheet" href="assets/v4.css?v=4.2"></head>
+    ?><!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ورود</title><link rel="stylesheet" href="assets/style.css?v=4.1"><link rel="stylesheet" href="assets/v4.css?v=4.3"><link rel="stylesheet" href="assets/choices.css?v=4.3"></head>
     <body class="login-page"><main class="login-card"><h1>ورود به سامانه حسابداران</h1><p>تقویم کاری، شرکت‌ها، سامانه‌ها و برنامه‌های حسابداری</p>
     <?php foreach(flashes() as $f): ?><div class="alert <?=h($f['type'])?>"><?=h($f['msg'])?></div><?php endforeach; ?>
     <form method="post" class="grid-form autosave" data-form-key="login"><?=csrf_field()?><input type="hidden" name="action" value="login">
     <label>ایمیل<input type="email" name="email" required></label><label>رمز عبور<input type="password" name="password" required></label>
     <button class="btn primary" type="submit">ورود</button><a class="btn google" href="index.php?page=google_start">ورود یا ثبت‌نام با گوگل</a></form></main>
-    <script src="assets/app.js?v=4.1"></script><script src="assets/v4.js?v=4.2"></script></body></html><?php
+    <script src="assets/app.js?v=4.1"></script><script src="assets/v4.js?v=4.3"></script></body></html><?php
 }
 function render_calendar(): void
 {
@@ -532,8 +528,8 @@ function render_companies(): void
     render_header('اطلاعات شرکت‌ها','اطلاعات ثبتی و مدیریتی؛ هر ردیف فقط بعد از زدن دکمه ویرایش قابل تغییر است.');
     echo '<section class="card"><details><summary>افزودن شرکت</summary><form method="post" class="grid-form compact autosave" data-form-key="company">'.csrf_field().'<input type="hidden" name="action" value="save_company">
     <label>نام شرکت<input name="name" required></label>
-    <label>نوع شرکت<input name="company_type" list="companyTypes"></label>
-    <label>شخصیت<select name="legal_personality"><option>حقوقی</option><option>حقیقی</option></select></label>
+    <label>نوع شرکت<select name="company_type">'.ChoiceRegistry::htmlOptions('company_type').'</select></label>
+    <label>شخصیت<select name="legal_personality">'.ChoiceRegistry::htmlOptions('legal_personality').'</select></label>
     <label>شناسه ملی<input name="national_id"></label>
     <label>کد اقتصادی<input name="economic_code"></label>
     <label>شماره ثبت<input name="registration_number"></label>
@@ -543,15 +539,15 @@ function render_companies(): void
     <label>مدیرعامل<input name="ceo_name"></label>
     <label>کدملی مدیرعامل<input name="ceo_national_id"></label>
     <label>شماره تماس مدیرعامل<input name="ceo_mobile"></label>
-    <label>نرم‌افزار<input name="software" placeholder="سپیدار، هلو، راهکاران..."></label>'.
+    <label>نرم‌افزار<select name="software">'.ChoiceRegistry::htmlOptions('accounting_software').'</select></label>'.
     render_extra_inputs('companies').'<button class="btn primary">ذخیره</button></form></details>
-    <datalist id="companyTypes"><option value="موسسه"><option value="شرکت"><option value="فروشگاه"><option value="شخص حقیقی"></datalist></section>';
+    </section>';
 
     echo '<form class="filters compact" method="get"><input type="hidden" name="page" value="companies">
     <label>جستجو<input name="q" value="'.h($_GET['q']??'').'" placeholder="نام، شناسه ملی، کد اقتصادی..."></label>
-    <label>نوع شرکت<input name="company_type" value="'.h($_GET['company_type']??'').'"></label>
-    <label>شخصیت<select name="legal_personality"><option value="">همه</option><option '.(($_GET['legal_personality']??'')==='حقوقی'?'selected':'').'>حقوقی</option><option '.(($_GET['legal_personality']??'')==='حقیقی'?'selected':'').'>حقیقی</option></select></label>
-    <label>نرم‌افزار<input name="software" value="'.h($_GET['software']??'').'"></label>
+    <label>نوع شرکت<select name="company_type">'.ChoiceRegistry::htmlOptions('company_type',(string)($_GET['company_type']??''),true,'همه نوع‌ها',true).'</select></label>
+    <label>شخصیت<select name="legal_personality">'.ChoiceRegistry::htmlOptions('legal_personality',(string)($_GET['legal_personality']??''),true,'همه',true).'</select></label>
+    <label>نرم‌افزار<select name="software">'.ChoiceRegistry::htmlOptions('accounting_software',(string)($_GET['software']??''),true,'همه نرم‌افزارها',true).'</select></label>
     <button class="btn primary tiny">فیلتر</button><a class="btn tiny" href="index.php?page=companies">پاک کردن</a></form>';
 
     $where=['workspace_id=?','active=1'];$params=[Tenant::id()];
@@ -569,8 +565,8 @@ function render_companies(): void
         $extra=extra_decode($r['extra_json']??'');
         echo '<tr data-id="'.(int)$r['id'].'"><td>'.row_actions('companies',$r['id']).'</td>';
         echo editable_cell('name',$r['name']);
-        echo '<td>'.select_inline('company_type',$r['company_type']?:$r['type'],['موسسه','شرکت','فروشگاه','شخص حقیقی']).'</td>';
-        echo '<td>'.select_inline('legal_personality',$r['legal_personality'],['حقوقی','حقیقی']).'</td>';
+        echo '<td>'.select_inline('company_type',$r['company_type']?:$r['type'],ChoiceRegistry::labels('company_type',(string)($r['company_type']?:$r['type']),true)).'</td>';
+        echo '<td>'.select_inline('legal_personality',$r['legal_personality'],ChoiceRegistry::labels('legal_personality',(string)$r['legal_personality'],true)).'</td>';
         echo editable_cell('national_id',$r['national_id']);
         echo editable_cell('economic_code',$r['economic_code']);
         echo editable_cell('registration_number',$r['registration_number']);
@@ -580,7 +576,7 @@ function render_companies(): void
         echo editable_cell('ceo_name',$r['ceo_name']?:$r['manager_name']);
         echo editable_cell('ceo_national_id',$r['ceo_national_id']);
         echo editable_cell('ceo_mobile',$r['ceo_mobile']);
-        echo editable_cell('software',$r['software']);
+        echo '<td>'.select_inline('software',$r['software'],ChoiceRegistry::labels('accounting_software',(string)$r['software'],true)).'</td>';
         foreach($fields as $f) echo editable_cell('extra.'.$f['field_key'],$extra[$f['field_key']]??'');
         echo '</tr>';
     }
@@ -617,7 +613,7 @@ function render_systems(): void
 }
 function render_daily(): void
 {
-    render_header('برنامه روزانه','تاریخ، روز، شرکت، شرح کار، موقعیت و توضیحات');
+    render_header('برنامه روزانه','تاریخ، روز، شرکت، شرح کار و توضیحات');
     echo '<section class="card"><details><summary>افزودن برنامه روزانه</summary><form method="post" class="grid-form compact autosave" data-form-key="daily">'.csrf_field().'<input type="hidden" name="action" value="save_daily_plan">
     <label>تاریخ<input class="jalali-date" name="plan_date" placeholder="1405/01/01"></label>
     <label>روز<input name="day_name"></label>
@@ -684,8 +680,8 @@ function render_monthly(): void
     foreach($rows as $r){
         $extra=extra_decode($r['extra_json']??'');
         echo '<tr data-id="'.(int)$r['id'].'"><td>'.row_actions('monthly_plans',$r['id']).'</td><td>'.company_select_inline($r['company_id']).'</td>';
-        echo '<td>'.select_inline('month_name',$r['month_name'],['فروردین','اردیبهشت','خرداد','تیر','مرداد','شهریور','مهر','آبان','آذر','دی','بهمن','اسفند','سالانه']).'</td>';
-        echo '<td>'.select_inline('season',$r['season'],['بهار','تابستان','پاییز','زمستان','سالانه']).'</td>';
+        echo '<td>'.select_inline('month_name',$r['month_name'],ChoiceRegistry::labels('monthly_month',(string)$r['month_name'],true)).'</td>';
+        echo '<td>'.select_inline('season',$r['season'],ChoiceRegistry::labels('monthly_season',(string)$r['season'],true)).'</td>';
         echo '<td>'.select_inline('work_type',$r['work_type'],work_types()).'</td>';
         echo date_input_cell('legal_deadline',fa_date($r['legal_deadline']));
         echo '<td>'.status_select_inline($r['status']).'</td>';
@@ -724,7 +720,7 @@ function render_kanban(): void
     render_header('کانبان','نمای بصری برنامه ماهانه بر اساس وضعیت');
     echo quick_filters(['company_id'=>['label'=>'شرکت','type'=>'company'],'work_type'=>['label'=>'نوع کار','type'=>'work_type']]);
     $company=$_GET['company_id']??''; $type=$_GET['work_type']??'';
-    $statuses=['باز','در حال انجام','منتظر مدارک','معوق','انجام شده'];
+    $statuses=ChoiceRegistry::workflowStatuses();
     echo '<section class="kanban" data-kanban-board><div class="kanban-help">کارت‌ها را بگیرید و بین ستون‌ها جابه‌جا کنید؛ وضعیت بلافاصله در دیتابیس ذخیره می‌شود.</div>';
     foreach($statuses as $s){
         $params=[Tenant::id(),$s]; $where='m.workspace_id=? AND m.status=?';

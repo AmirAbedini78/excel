@@ -1,0 +1,17 @@
+/* Accounting CRM V4.3 - Dynamic Choice Sets */
+.choice-help{display:flex;align-items:center;justify-content:space-between}
+.choice-help p{margin:4px 0 0;color:var(--muted);line-height:1.8;font-size:10.5px}
+.choice-set-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.choice-set-card{margin:0!important;display:flex;flex-direction:column;min-height:260px}
+.choice-set-head{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:8px}
+.choice-set-head h2{font-size:12.5px;margin:0}.choice-set-head p{font-size:9.5px;color:var(--muted);margin:3px 0 0;line-height:1.6}
+.choice-count{white-space:nowrap;font-size:9px;border:1px solid var(--line);background:#f8fafc;border-radius:999px;padding:3px 7px}
+.choice-add-form{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:5px;margin-bottom:7px}
+.choice-value-list{display:grid;gap:4px;max-height:320px;overflow:auto;overscroll-behavior:contain;padding-left:2px}
+.choice-value-row{display:flex;align-items:center;justify-content:space-between;gap:8px;border:1px solid var(--line);border-radius:8px;padding:6px 7px;background:#fff}
+.choice-value-row.inactive{opacity:.62;background:#f8fafc}
+.choice-value-main{min-width:0}.choice-value-main b{display:block;font-size:10.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.choice-value-main small{font-size:8.5px;color:var(--muted)}
+.choice-actions{display:flex;gap:3px;align-items:center;flex:0 0 auto}.choice-actions form{margin:0}
+.choice-restore{margin-top:auto;padding-top:8px}
+@media(max-width:900px){.choice-set-grid{grid-template-columns:1fr}}
+@media(max-width:520px){.choice-value-row{align-items:flex-start;flex-direction:column}.choice-actions{width:100%;flex-wrap:wrap}.choice-actions form:last-child{margin-inline-start:auto}}

@@ -60,9 +60,45 @@ try{
 
     if($res==='meta'){
         if($method!=='GET')av2err('method','Method not allowed',405);
-        av2(['name'=>'Accounting CRM SaaS API','version'=>'2.0.0','workspace'=>Tenant::current(),'resources'=>['companies','daily-plans','monthly-plans','calendar','kanban','systems','portals','custom-fields','notes','files','attachments','members','roles','workspace','audit-logs','table-preferences','imports','exports']]);
+        av2(['name'=>'Accounting CRM SaaS API','version'=>'2.1.0','workspace'=>Tenant::current(),'resources'=>['companies','daily-plans','monthly-plans','calendar','kanban','systems','portals','custom-fields','notes','files','attachments','members','roles','workspace','audit-logs','table-preferences','choices','imports','exports']]);
     }
 
+
+    if($res==='choices'){
+        if($method==='GET'){
+            $setKey=trim((string)($_GET['set_key']??''));
+            if($setKey!=='') av2(['set'=>ChoiceRegistry::set($setKey),'values'=>ChoiceRegistry::valuesDetailed($setKey,true)]);
+            av2(ChoiceRegistry::sets());
+        }
+
+        api2_member_permission('choices.manage');
+
+        if($method==='POST'){
+            $b=api2_body();
+            $r=ChoiceRegistry::addValue(trim((string)($b['set_key']??'')),trim((string)($b['value']??'')),(int)($b['sort_order']??0));
+            api2_log('create','choice_values',(int)($r['id']??0),['set_key'=>$b['set_key']??'']);
+            av2($r,201);
+        }
+
+        if(in_array($method,['PATCH','PUT'],true)){
+            if(!$id)throw new RuntimeException('id required');
+            $b=api2_body();
+            if(array_key_exists('active',$b)) $r=ChoiceRegistry::toggle($id,(bool)$b['active']);
+            elseif(isset($b['direction'])) $r=ChoiceRegistry::move($id,$b['direction']==='up'?'up':'down');
+            else throw new RuntimeException('active or direction is required');
+            api2_log('update','choice_values',$id,$b);
+            av2($r);
+        }
+
+        if($method==='DELETE'){
+            if(!$id)throw new RuntimeException('id required');
+            $r=ChoiceRegistry::toggle($id,false);
+            api2_log('delete','choice_values',$id);
+            av2($r);
+        }
+
+        av2err('method','Method not allowed',405);
+    }
     if($res==='companies'){
         if($method==='GET'){
             if($id){$r=api2_one("SELECT * FROM companies WHERE id=? AND workspace_id=? AND active=1",[$id,$wid]);if(!$r)av2err('not_found','Company not found',404);av2($r);}
