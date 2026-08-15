@@ -13,6 +13,7 @@ deployment:
     - /bin/cp API_V2_SAAS_FA.md $DEPLOYPATH
     - /bin/cp api_tokens.php $DEPLOYPATH
     - /bin/cp api_v2.php $DEPLOYPATH
+    - /bin/cp v5_api.php $DEPLOYPATH
     - /bin/cp file_download.php $DEPLOYPATH
     - /bin/cp v4_files.php $DEPLOYPATH
     - /bin/cp openapi.json $DEPLOYPATH

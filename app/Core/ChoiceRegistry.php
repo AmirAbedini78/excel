@@ -43,6 +43,23 @@ final class ChoiceRegistry
     {
         static $done=false;
         if($done)return;
+
+        // V5_FAST_CHOICE_SCHEMA
+        if(class_exists('RuntimeCache') && RuntimeCache::schemaReady(RuntimeCache::SCHEMA_VERSION)){
+            if(Auth::check()){
+                $wid=Tenant::id();
+                if($wid>0){
+                    try{
+                        $st=pdo()->prepare("SELECT 1 FROM choice_sets WHERE workspace_id=? LIMIT 1");
+                        $st->execute([$wid]);
+                        if(!$st->fetchColumn())self::seedWorkspace($wid);
+                    }catch(Throwable $e){}
+                }
+            }
+            $done=true;
+            return;
+        }
+
         $pdo=pdo();
         $pdo->exec("CREATE TABLE IF NOT EXISTS choice_sets (
             id INT AUTO_INCREMENT PRIMARY KEY,
@@ -142,25 +159,44 @@ final class ChoiceRegistry
         if(!$includeInactive)$sql.=" AND active=1";
         $sql.=" ORDER BY sort_order,id";
         $st=pdo()->prepare($sql);$st->execute([Tenant::id(),(int)$set['id']]);$rows=$st->fetchAll();
-        foreach($rows as &$r)$r['usage_count']=self::usageCount($key,(string)$r['value']);
+
+        $usage=[];
+        if(isset(self::$defs[$key])){
+            $def=self::$defs[$key];$table=$def['table'];$column=$def['column'];
+            try{
+                $st=pdo()->prepare("SELECT `$column` v,COUNT(*) c FROM `$table` WHERE workspace_id=? AND `$column` IS NOT NULL GROUP BY `$column`");
+                $st->execute([Tenant::id()]);
+                foreach($st->fetchAll() as $u)$usage[(string)$u['v']]=(int)$u['c'];
+            }catch(Throwable $e){}
+        }
+        foreach($rows as &$r)$r['usage_count']=$usage[(string)$r['value']]??0;
         return $rows;
     }
 
     public static function labels(string $key,string $selected='',bool $includeStored=false): array
     {
-        $out=[];
-        foreach(self::valuesDetailed($key,false) as $r)$out[]=(string)$r['value'];
+        static $local=[];
+        $wid=Tenant::id();$localKey=$wid.'|'.$key.'|'.($includeStored?'1':'0');
+        if(!array_key_exists($localKey,$local)){
+            self::ensureSchema();$out=[];
+            $st=pdo()->prepare("SELECT v.value FROM choice_values v JOIN choice_sets s ON s.id=v.set_id
+                WHERE v.workspace_id=? AND s.workspace_id=? AND s.set_key=? AND s.active=1 AND v.active=1
+                ORDER BY v.sort_order,v.id");
+            $st->execute([$wid,$wid,$key]);
+            foreach($st->fetchAll() as $r)$out[]=(string)$r['value'];
 
-        if($includeStored && isset(self::$defs[$key])){
-            $def=self::$defs[$key];$table=$def['table'];$column=$def['column'];
-            try{
-                $st=pdo()->prepare("SELECT DISTINCT `$column` v FROM `$table`
-                    WHERE workspace_id=? AND `$column` IS NOT NULL AND TRIM(`$column`)<>'' ORDER BY `$column`");
-                $st->execute([Tenant::id()]);
-                foreach($st->fetchAll() as $r)if(!in_array((string)$r['v'],$out,true))$out[]=(string)$r['v'];
-            }catch(Throwable $e){}
+            if($includeStored && isset(self::$defs[$key])){
+                $def=self::$defs[$key];$table=$def['table'];$column=$def['column'];
+                try{
+                    $st=pdo()->prepare("SELECT DISTINCT `$column` v FROM `$table`
+                        WHERE workspace_id=? AND `$column` IS NOT NULL AND TRIM(`$column`)<>'' ORDER BY `$column`");
+                    $st->execute([$wid]);
+                    foreach($st->fetchAll() as $r)if(!in_array((string)$r['v'],$out,true))$out[]=(string)$r['v'];
+                }catch(Throwable $e){}
+            }
+            $local[$localKey]=$out;
         }
-
+        $out=$local[$localKey];
         $selected=trim($selected);
         if($selected!==''&&!in_array($selected,$out,true))$out[]=$selected;
         return $out;

@@ -41,34 +41,36 @@
       return typeof old!=='undefined' && fieldValue(el)!==old;
     });
     if(!changed.length){setEditing(row,false);btn.textContent='ویرایش';return;}
+    const changes={};changed.forEach(el=>{changes[el.dataset.field]=fieldValue(el)});
     rowState(row,'saving'); btn.disabled=true;
     try{
-      for(const el of changed){
-        await post({action:'inline_update',entity,id,field:el.dataset.field,value:fieldValue(el)});
-        el.dataset.old=fieldValue(el);
-      }
+      await post({action:'inline_update_batch',entity,id,changes:JSON.stringify(changes)});
+      changed.forEach(el=>{el.dataset.old=fieldValue(el)});
       setEditing(row,false); btn.textContent='ویرایش'; rowState(row,'saved');
     }catch(e){rowState(row,'error-save');alert(e.message);}
     finally{btn.disabled=false;}
   }
 
-  qsa('[data-edit-row]').forEach(btn=>btn.addEventListener('click',()=>{
-    const row=btn.closest('tr'); if(!row)return;
-    if(!row.classList.contains('row-editing')){
-      setEditing(row,true); btn.textContent='ذخیره';
-      const first=row.querySelector('.editable-cell,[data-field]:not([disabled])');
-      if(first && first.focus) first.focus();
-    }else saveRow(row,btn);
-  }));
-
-  qsa('[data-delete]').forEach(btn=>btn.addEventListener('click',async()=>{
-    if(!confirm('این رکورد حذف شود؟'))return;
-    try{
-      await post({action:'delete_record',entity:btn.dataset.entity,id:btn.dataset.id});
-      btn.closest('tr')?.remove();
-    }catch(e){alert(e.message);}
-  }));
-
+  // Delegated row operations also work for AJAX-inserted rows.
+  document.addEventListener('click',e=>{
+    const edit=e.target.closest('[data-edit-row]');
+    if(edit){
+      const row=edit.closest('tr');if(!row)return;
+      if(!row.classList.contains('row-editing')){
+        setEditing(row,true);edit.textContent='ذخیره';
+        row.querySelector('.editable-cell,[data-field]:not([disabled])')?.focus?.();
+      }else saveRow(row,edit);
+      return;
+    }
+    const del=e.target.closest('[data-delete]');
+    if(del){
+      e.preventDefault();
+      if(!confirm('این رکورد حذف شود؟'))return;
+      post({action:'delete_record',entity:del.dataset.entity,id:del.dataset.id})
+        .then(()=>del.closest('tr')?.remove())
+        .catch(err=>alert(err.message));
+    }
+  });
   // Systems matrix: edit/save per company row.
   qsa('[data-edit-system]').forEach(btn=>btn.addEventListener('click',async()=>{
     const row=btn.closest('[data-system-row]'); if(!row)return;
@@ -156,7 +158,7 @@
     picker.style.top=(scrollY+r.bottom+4)+'px';
     picker.style.left=Math.max(8,Math.min(scrollX+r.left,scrollX+innerWidth-pw-8))+'px';
   }
-  qsa('input.jalali-date').forEach(i=>i.addEventListener('focus',()=>openPicker(i)));
+  document.addEventListener('focusin',e=>{const i=e.target.closest?.('input.jalali-date');if(i)openPicker(i);});
   document.addEventListener('click',e=>{if(picker&&!picker.contains(e.target)&&!e.target.classList.contains('jalali-date'))closePicker();});
 
   // Calendar day modal.
@@ -239,24 +241,30 @@
     };
 
     const cellsByKey=(key)=>qsa(`[data-col-key="${CSS.escape(key)}"]`,table);
+    // V5: stable numeric width model. No feedback loop from measuring an already-expanded table.
     const syncTableWidth=()=>{
       const visible=Array.from(headRow.cells).filter(th=>!th.classList.contains('col-hidden'));
+      const explicit=visible.some(th=>Number(state.widths[th.dataset.colKey]||0)>=56);
+      if(!explicit){table.style.removeProperty('width');return;}
       let sum=0;
       visible.forEach(th=>{
         const key=th.dataset.colKey;
-        const w=Number(state.widths[key])||Math.max(70,Math.round(th.getBoundingClientRect().width||100));
-        sum+=w;
+        const fallback=Number(th.dataset.defaultWidth||0)||120;
+        sum+=Math.max(56,Math.min(700,Number(state.widths[key])||fallback));
       });
-      const wrap=table.closest('.table-wrap');
-      const min=wrap?.clientWidth||0;
-      table.style.width=Math.max(min,sum)+'px';
+      const min=table.closest('.table-wrap')?.clientWidth||0;
+      table.style.width=Math.max(min,Math.min(sum,16000))+'px';
     };
     const applyWidths=()=>{
       Array.from(headRow.cells).forEach(th=>{
         const key=th.dataset.colKey,w=Number(state.widths[key]||0);
         cellsByKey(key).forEach(cell=>{
-          if(w>=56){cell.style.width=w+'px';cell.style.minWidth=w+'px';cell.style.maxWidth=w+'px';}
-          else {cell.style.removeProperty('width');cell.style.removeProperty('min-width');cell.style.removeProperty('max-width');}
+          if(w>=56){
+            const safe=Math.max(56,Math.min(700,Math.round(w)));
+            cell.style.width=safe+'px';cell.style.minWidth=safe+'px';cell.style.maxWidth=safe+'px';
+          }else{
+            cell.style.removeProperty('width');cell.style.removeProperty('min-width');cell.style.removeProperty('max-width');
+          }
         });
       });
       requestAnimationFrame(syncTableWidth);
@@ -297,7 +305,7 @@
       toolbar.dataset.for=tableKey;
       const gear=document.createElement('button');
       gear.type='button';gear.className='btn icon table-gear';gear.title='تنظیم ستون‌ها';gear.setAttribute('aria-label','تنظیم ستون‌ها');gear.textContent='⚙';
-      const hint=document.createElement('span');hint.className='list-toolbar-hint';hint.textContent='ستون‌ها قابل جابه‌جایی و تغییر اندازه‌اند';
+      const hint=document.createElement('span');hint.className='list-toolbar-hint';hint.textContent='ستون‌ها قابل جابه‌جایی‌اند؛ عرض فقط با عدد تنظیم می‌شود';
       const panel=document.createElement('div');panel.className='table-settings-panel';panel.hidden=true;
       toolbar.append(hint,gear,panel);
       if(wrap) card.insertBefore(toolbar,wrap); else card.prepend(toolbar);
@@ -324,15 +332,15 @@
         const handle=document.createElement('span');handle.className='drag-handle';handle.textContent='⋮⋮';handle.title='برای جابه‌جایی بکشید';
         const check=document.createElement('input');check.type='checkbox';check.checked=!state.hidden.includes(key);
         const label=document.createElement('span');label.className='column-config-label';label.textContent=currentLabel(key);
-        const width=document.createElement('input');width.type='number';width.className='column-width-input';width.min='56';width.max='900';width.step='10';
-        width.value=String(Number(state.widths[key])||Math.round(Array.from(headRow.cells).find(x=>x.dataset.colKey===key)?.getBoundingClientRect().width||100));
+        const width=document.createElement('input');width.type='number';width.className='column-width-input';width.min='56';width.max='700';width.step='10';
+        width.value=String(Math.max(56,Math.min(700,Number(state.widths[key])||Math.round(Array.from(headRow.cells).find(x=>x.dataset.colKey===key)?.getBoundingClientRect().width||100))));
         width.title='عرض ستون (پیکسل)';
         check.addEventListener('change',()=>{
           state.hidden=check.checked?state.hidden.filter(x=>x!==key):Array.from(new Set([...state.hidden,key]));
           applyHidden();savePrefs();
         });
         width.addEventListener('change',()=>{
-          const v=Math.max(56,Math.min(900,Number(width.value)||100));state.widths[key]=v;applyWidths();savePrefs();
+          const v=Math.max(56,Math.min(700,Number(width.value)||100));state.widths[key]=v;applyWidths();savePrefs();
         });
         item.addEventListener('dragstart',e=>{e.dataTransfer.setData('text/column-key',key);item.classList.add('dragging');});
         item.addEventListener('dragend',()=>item.classList.remove('dragging'));
@@ -354,11 +362,10 @@
       });
     }
 
-    // Header drag/drop reordering.
+    // Header drag/drop reordering. Width resizing by pointer is intentionally disabled in V5.
     Array.from(headRow.cells).forEach(th=>{
       th.draggable=true;th.classList.add('draggable-col');
       th.addEventListener('dragstart',e=>{
-        if(e.target.closest('.col-resizer')){e.preventDefault();return;}
         e.dataTransfer.effectAllowed='move';
         e.dataTransfer.setData('text/table-col',th.dataset.colKey);
         th.classList.add('column-dragging');
@@ -380,27 +387,9 @@
         state.order=order;applyOrder();applyHidden();applyWidths();savePrefs();
         if(toolbar?.querySelector('.table-settings-panel:not([hidden])'))renderPanel(toolbar.querySelector('.table-settings-panel'));
       });
-
-      const resizer=document.createElement('span');resizer.className='col-resizer';resizer.title='تغییر عرض ستون';
-      th.appendChild(resizer);
-      resizer.addEventListener('pointerdown',e=>{
-        e.preventDefault();e.stopPropagation();resizer.setPointerCapture?.(e.pointerId);
-        const key=th.dataset.colKey,startX=e.clientX,startW=th.getBoundingClientRect().width;
-        table.classList.add('column-resizing');
-        const move=ev=>{
-          const rtl=getComputedStyle(table).direction==='rtl';
-          const delta=rtl?(startX-ev.clientX):(ev.clientX-startX);
-          const w=Math.max(56,Math.min(900,Math.round(startW+delta)));
-          state.widths[key]=w;applyWidths();
-        };
-        const up=()=>{
-          document.removeEventListener('pointermove',move);document.removeEventListener('pointerup',up);
-          table.classList.remove('column-resizing');savePrefs();
-        };
-        document.addEventListener('pointermove',move);document.addEventListener('pointerup',up,{once:true});
-      });
     });
   }
+  window.AccountingSmartTables={init:initSmartTable,initAll:(root=document)=>qsa('table.smart-table[data-table-key]',root).forEach(initSmartTable)};
   qsa('table.smart-table[data-table-key]').forEach(initSmartTable);
 
   // Kanban drag & drop with database persistence.

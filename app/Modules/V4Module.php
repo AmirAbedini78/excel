@@ -3,6 +3,7 @@ final class V4Module
 {
     public static function ensureSchema(): void
     {
+        if(class_exists('RuntimeCache') && RuntimeCache::schemaReady(RuntimeCache::SCHEMA_VERSION)) return;
         Tenant::ensureSchema();Audit::ensureSchema();FileLibrary::ensureSchema();
         pdo()->exec("CREATE TABLE IF NOT EXISTS notes (
             id BIGINT AUTO_INCREMENT PRIMARY KEY,

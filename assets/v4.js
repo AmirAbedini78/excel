@@ -23,7 +23,7 @@
   }
 
   // Universal attachment component for create forms
-  const supported={save_company:'companies',save_daily_plan:'daily_plans',save_monthly_plan:'monthly_plans',save_custom_field:'custom_fields',v4_save_note:'notes'};
+  const supported={save_company:'companies',save_daily_plan:'daily_plans',save_monthly_plan:'monthly_plans',save_custom_field:'custom_fields',v4_save_note:'notes',v5_note_save:'notes',v5_phonebook_save:'phonebook_entries'};
   qsa('form').forEach(form=>{
     const a=form.querySelector('input[name=action]')?.value,entity=supported[a];if(!entity||form.querySelector('.v4-form-files'))return;
     const box=document.createElement('div');box.className='v4-form-files span2';box.innerHTML='<div class="v4-form-files-head"><strong>فایل‌های پیوست</strong><div><button type="button" class="btn tiny" data-pick-library>انتخاب از لایبرری</button><label class="btn tiny primary v4-upload-label">آپلود مستقیم<input type="file" hidden data-direct-upload></label></div></div><div class="v4-selected-files"></div>';

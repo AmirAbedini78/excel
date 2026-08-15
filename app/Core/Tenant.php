@@ -7,6 +7,7 @@ final class Tenant
 
     public static function ensureSchema(): void
     {
+        if(class_exists('RuntimeCache') && RuntimeCache::schemaReady(RuntimeCache::SCHEMA_VERSION)) return;
         $pdo=pdo();
         $pdo->exec("CREATE TABLE IF NOT EXISTS workspaces (
             id INT AUTO_INCREMENT PRIMARY KEY,
@@ -201,6 +202,9 @@ final class Tenant
             ['audit.view','مشاهده لاگ‌ها','audit',110],
             ['workspace.manage','مدیریت محیط کاری','workspace',120],['billing.manage','مدیریت اشتراک','billing',130],
             ['settings.manage','مدیریت تنظیمات','settings',140],['api.manage','مدیریت API','api',150],
+            ['phonebook.view','مشاهده دفترچه تلفن','phonebook',160],['phonebook.create','ثبت تماس و پیگیری','phonebook',161],['phonebook.update','ویرایش تماس و پیگیری','phonebook',162],['phonebook.delete','حذف تماس و پیگیری','phonebook',163],
+            ['shares.view','مشاهده داده‌های اشتراکی','shares',170],['shares.manage','اشتراک‌گذاری داده با محیط دیگر','shares',171],
+            ['cache.manage','مدیریت کش و عملکرد','performance',180],
         ];
         $st=$pdo->prepare("INSERT INTO workspace_permissions (permission_key,title,group_key,sort_order) VALUES (?,?,?,?) ON DUPLICATE KEY UPDATE title=VALUES(title),group_key=VALUES(group_key),sort_order=VALUES(sort_order)");
         foreach($defs as $d)$st->execute($d);
@@ -303,8 +307,8 @@ final class Tenant
         $sets=[
             'owner'=>array_keys($byKey),
             'workspace_admin'=>array_values(array_filter(array_keys($byKey),fn($x)=>!in_array($x,['billing.manage'],true))),
-            'manager'=>array_values(array_filter(array_keys($byKey),fn($x)=>!in_array($x,['billing.manage','workspace.manage','members.manage','settings.manage','api.manage'],true))),
-            'accountant'=>array_values(array_filter(array_keys($byKey),fn($x)=>preg_match('/^(dashboard|companies|systems|daily|monthly|kanban|notes|files)\./',$x))),
+            'manager'=>array_values(array_filter(array_keys($byKey),fn($x)=>!in_array($x,['billing.manage','workspace.manage','members.manage','settings.manage','api.manage','shares.manage','cache.manage'],true))),
+            'accountant'=>array_values(array_filter(array_keys($byKey),fn($x)=>preg_match('/^(dashboard|companies|systems|daily|monthly|kanban|notes|files|phonebook)\./',$x) || $x==='shares.view')),
             'viewer'=>array_values(array_filter(array_keys($byKey),fn($x)=>str_ends_with($x,'.view'))),
         ];
         foreach($sets as $key=>$perms){
@@ -322,6 +326,8 @@ final class Tenant
     public static function boot(): void
     {
         if(!Auth::check())return;
+        // V5_IDEMPOTENT_TENANT_BOOT
+        if(self::$workspace!==null && self::$membership!==null)return;
         $uid=(int)Auth::user()['id'];
 
         if(self::isPlatformAdmin()){

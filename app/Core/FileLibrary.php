@@ -3,6 +3,7 @@ final class FileLibrary
 {
     public static function ensureSchema(): void
     {
+        if(class_exists('RuntimeCache') && RuntimeCache::schemaReady(RuntimeCache::SCHEMA_VERSION)) return;
         $pdo=pdo();
         $pdo->exec("CREATE TABLE IF NOT EXISTS library_files (
             id BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -91,7 +92,7 @@ final class FileLibrary
     public static function attach(string $entity,int $recordId,array $fileIds): void
     {
         Tenant::requirePermission('files.attach');self::ensureSchema();if(!$recordId)return;
-        $allowed=['companies','daily_plans','monthly_plans','custom_fields','systems_company','notes'];
+        $allowed=['companies','daily_plans','monthly_plans','custom_fields','systems_company','notes','phonebook_entries'];
         if(!in_array($entity,$allowed,true))throw new RuntimeException('اتچ برای این بخش مجاز نیست.');
         $ins=pdo()->prepare("INSERT IGNORE INTO file_attachments (workspace_id,file_id,entity_key,record_id,attached_by,created_at) VALUES (?,?,?,?,?,NOW())");
         foreach(array_unique(array_filter(array_map('intval',$fileIds))) as $fid){

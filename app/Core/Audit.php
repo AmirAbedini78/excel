@@ -3,6 +3,7 @@ final class Audit
 {
     public static function ensureSchema(): void
     {
+        if(class_exists('RuntimeCache') && RuntimeCache::schemaReady(RuntimeCache::SCHEMA_VERSION)) return;
         pdo()->exec("CREATE TABLE IF NOT EXISTS audit_logs (
             id BIGINT AUTO_INCREMENT PRIMARY KEY,
             workspace_id INT NOT NULL,

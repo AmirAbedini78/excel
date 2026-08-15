@@ -2,10 +2,7 @@
 require __DIR__ . '/app/bootstrap.php';
 require_once __DIR__.'/app/Modules/V4Module.php';
 require_once __DIR__.'/app/Modules/ChoiceModule.php';
-if (file_exists(__DIR__.'/app/config.php')) {
-    try { Schema::migrate(pdo()); } catch (Throwable $e) { /* migrate page shows exact error */ }
-}
-
+require_once __DIR__.'/app/Modules/V5Module.php';
 function q(string $sql, array $params=[]): array { $st=pdo()->prepare($sql); $st->execute($params); return $st->fetchAll(); }
 function one(string $sql, array $params=[]): ?array { $st=pdo()->prepare($sql); $st->execute($params); $r=$st->fetch(); return $r ?: null; }
 function scalarv(string $sql, array $params=[]): int { $st=pdo()->prepare($sql); $st->execute($params); return (int)$st->fetchColumn(); }
@@ -22,7 +19,11 @@ function day_name(?string $d): string {
 }
 function companies(bool $all=false): array {
     $wid=Tenant::id();
-    return q("SELECT * FROM companies WHERE workspace_id=? ".($all?'':'AND active=1')." ORDER BY name",[$wid]);
+    $ttl=max(10,min(3600,(int)setting('cache_ttl_seconds','60')));
+    $key=$all?'companies:all':'companies:active';
+    return RuntimeCache::remember($key,$ttl,function()use($wid,$all){
+        return q("SELECT * FROM companies WHERE workspace_id=? ".($all?'':'AND active=1')." ORDER BY name",[$wid]);
+    },$wid);
 }
 function company_options($selected=null, bool $all=false): string {
     $html=$all?'<option value="">همه شرکت‌ها</option>':'';
@@ -85,7 +86,9 @@ function quick_filters(array $fields): string {
     $html.='<button class="btn primary tiny" type="submit">فیلتر</button><a class="btn tiny" href="index.php?page='.h($_GET['page']??'dashboard').'">پاک کردن</a></form>';
     return $html;
 }
-function log_activity(string $entity, int $id, string $action, string $summary='', array $payload=[]): void {
+function log_activity(string $entity, int $id, string $action, string $summary='', array $payload=[]): void {    // V5_CACHE_INVALIDATION
+    RuntimeCache::clearWorkspace(Tenant::id());
+
     Audit::log($action,$entity,$id,$summary,null,null,$payload);
     try{
         $uid=Auth::check() ? (int)Auth::user()['id'] : null;
@@ -186,6 +189,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     try {
         if (str_starts_with($action,'v4_')) V4Module::handle($action);
         if (str_starts_with($action,'choice_')) ChoiceModule::handle($action);
+        if ($action === 'inline_update_batch') handle_inline_update_batch();
         if ($action === 'inline_update') handle_inline_update();
         if ($action === 'delete_record') handle_delete_record();
         if ($action === 'save_company') handle_save_company();
@@ -199,11 +203,60 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($action === 'reset_table_preferences') handle_reset_table_preferences();
         if ($action === 'run_migration') { Schema::migrate(pdo()); flash('مایگریشن دیتابیس با موفقیت اجرا شد.'); redirect('index.php?page=settings'); }
     } catch (Throwable $e) {
-        if (in_array($action,['inline_update','delete_record','save_system_credentials','delete_system_credentials','save_table_preferences','reset_table_preferences'],true)) json_out(['ok'=>false,'error'=>$e->getMessage()]);
+        if (in_array($action,['inline_update','inline_update_batch','delete_record','save_system_credentials','delete_system_credentials','save_table_preferences','reset_table_preferences'],true)) json_out(['ok'=>false,'error'=>$e->getMessage()]);
         flash($e->getMessage(),'danger'); redirect($_SERVER['HTTP_REFERER'] ?? 'index.php');
     }
 }
 
+function handle_inline_update_batch(): never
+{
+    $entity=(string)($_POST['entity']??'');
+    $id=(int)($_POST['id']??0);
+    $changes=json_decode((string)($_POST['changes']??'{}'),true);
+    if(!$id||!is_array($changes)||!$changes)throw new RuntimeException('داده ویرایش نامعتبر است.');
+
+    $pm=['companies'=>'companies.update','daily_plans'=>'daily.update','monthly_plans'=>'monthly.update','custom_fields'=>'custom_fields.manage'];
+    if(isset($pm[$entity]))Tenant::requirePermission($pm[$entity]);
+
+    $map=[
+        'companies'=>['table'=>'companies','fields'=>['name','company_type','legal_personality','national_id','economic_code','registration_number','address','postal_code','phone','ceo_name','ceo_national_id','ceo_mobile','software']],
+        'daily_plans'=>['table'=>'daily_plans','fields'=>['plan_date','day_name','company_id','work_description','notes']],
+        'monthly_plans'=>['table'=>'monthly_plans','fields'=>['company_id','month_name','season','work_type','legal_deadline','status','work_day','completed_date']],
+        'custom_fields'=>['table'=>'custom_fields','fields'=>['entity_key','label','field_type','options','sort_order']],
+    ];
+    if(!isset($map[$entity]))throw new RuntimeException('بخش قابل ویرایش نیست.');
+    $table=$map[$entity]['table'];$sets=[];$vals=[];$extraChanges=[];
+
+    foreach($changes as $field=>$raw){
+        $value=is_string($raw)?trim($raw):$raw;
+        if(str_starts_with((string)$field,'extra.')){
+            if(!in_array($entity,['companies','daily_plans','monthly_plans'],true))continue;
+            $extraChanges[substr((string)$field,6)]=$value;continue;
+        }
+        if(!in_array($field,$map[$entity]['fields'],true))continue;
+        if(in_array($field,['plan_date','legal_deadline','completed_date'],true))$value=input_date_to_sql((string)$value);
+        if($field==='company_id')$value=$value?(int)$value:null;
+        if($field==='sort_order')$value=(int)$value;
+        $sets[]="`$field`=?";$vals[]=$value;
+        if($entity==='daily_plans'&&$field==='plan_date'&&!array_key_exists('day_name',$changes)){
+            $sets[]="`day_name`=?";$vals[]=day_name($value);
+        }
+    }
+
+    if($extraChanges){
+        $row=one("SELECT extra_json FROM `$table` WHERE id=? AND workspace_id=?",[$id,Tenant::id()]);
+        if(!$row)throw new RuntimeException('رکورد پیدا نشد.');
+        $extra=extra_decode($row['extra_json']??'');
+        foreach($extraChanges as $k=>$v)$extra[$k]=$v;
+        $sets[]="`extra_json`=?";$vals[]=extra_encode($extra);
+    }
+    if(!$sets)json_out(['ok'=>true,'changed'=>0]);
+
+    $sets[]='updated_at=NOW()';$vals[]=$id;$vals[]=Tenant::id();
+    pdo()->prepare("UPDATE `$table` SET ".implode(',',$sets)." WHERE id=? AND workspace_id=?")->execute($vals);
+    log_activity($entity,$id,'inline_update_batch','ویرایش گروهی ردیف',['fields'=>array_keys($changes)]);
+    json_out(['ok'=>true,'changed'=>count($changes)]);
+}
 function handle_inline_update(): never
 {
     $entity=$_POST['entity']??'';
@@ -268,6 +321,8 @@ function handle_save_company(): void
     }
     FileLibrary::syncFromPost('companies',$id);
     log_activity('companies',$id,'save','ذخیره شرکت');
+    RuntimeCache::clearWorkspace(Tenant::id());
+    if(!empty($_POST['_ajax'])) json_out(['ok'=>true,'id'=>$id,'row_html'=>V5Module::coreRowHtml('companies',$id),'message'=>'اطلاعات شرکت ذخیره شد.']);
     flash('اطلاعات شرکت ذخیره شد.'); redirect('index.php?page=companies');
 }
 function handle_save_daily_plan(): void
@@ -284,6 +339,8 @@ function handle_save_daily_plan(): void
     }
     FileLibrary::syncFromPost('daily_plans',$id);
     log_activity('daily_plans',$id,'save','ذخیره برنامه روزانه');
+    RuntimeCache::clearWorkspace(Tenant::id());
+    if(!empty($_POST['_ajax'])) json_out(['ok'=>true,'id'=>$id,'row_html'=>V5Module::coreRowHtml('daily_plans',$id),'message'=>'برنامه روزانه ذخیره شد.']);
     flash('برنامه روزانه ذخیره شد.'); redirect('index.php?page=daily');
 }
 function handle_save_monthly_plan(): void
@@ -302,6 +359,8 @@ function handle_save_monthly_plan(): void
     }
     FileLibrary::syncFromPost('monthly_plans',$id);
     log_activity('monthly_plans',$id,'save','ذخیره برنامه ماهانه');
+    RuntimeCache::clearWorkspace(Tenant::id());
+    if(!empty($_POST['_ajax'])) json_out(['ok'=>true,'id'=>$id,'row_html'=>V5Module::coreRowHtml('monthly_plans',$id),'message'=>'برنامه ماهانه ذخیره شد.']);
     flash('برنامه ماهانه ذخیره شد.'); redirect('index.php?page=monthly');
 }
 function handle_save_system_credentials(): never
@@ -398,44 +457,53 @@ function render_header(string $title, string $subtitle=''): void
 {
     $nav = [
         'dashboard'=>'تقویم',
-        'companies'=>'اطلاعات شرکت‌ها',
-        'systems'=>'سامانه‌ها',
         'monthly'=>'برنامه ماهانه',
         'daily'=>'برنامه روزانه',
+        'kanban'=>'کانبان',
+        'companies'=>'اطلاعات شرکت‌ها',
+        'systems'=>'سامانه‌ها',
+        'phonebook'=>'دفترچه تلفن',
+        'notes'=>'نوت‌ها و کارها',
+        'library'=>'لایبرری',
         'custom_fields'=>'فیلدهای اضافه',
         'choices'=>'مقادیر انتخابی',
-        'kanban'=>'کانبان',
-        'notes'=>'نوت‌ها',
-        'library'=>'لایبرری',
+        'shares'=>'اشتراک داده‌ها',
         'access'=>'کاربران و دسترسی‌ها',
         'platform'=>'مدیریت SaaS',
+        'performance'=>'عملکرد و کش',
         'settings'=>'تنظیمات',
     ];
+    $navGroups = [
+        'dashboard'=>'کار و برنامه‌ریزی',
+        'companies'=>'اطلاعات و ارتباطات',
+        'notes'=>'ابزارهای کاری',
+        'access'=>'مدیریت و زیرساخت',
+    ];
     $navPerm=['dashboard'=>'dashboard.view','companies'=>'companies.view','systems'=>'systems.view','monthly'=>'monthly.view','daily'=>'daily.view','custom_fields'=>'custom_fields.manage',
-        'choices'=>'choices.manage','kanban'=>'kanban.view','notes'=>'notes.view','library'=>'files.view','access'=>'members.view','settings'=>'settings.manage'];
+        'choices'=>'choices.manage','kanban'=>'kanban.view','notes'=>'notes.view','phonebook'=>'phonebook.view','shares'=>'shares.view','library'=>'files.view','access'=>'members.view','performance'=>'cache.manage','settings'=>'settings.manage'];
     foreach($navPerm as $nk=>$np) if(isset($nav[$nk]) && !Tenant::can($np)) unset($nav[$nk]);
     if(!Tenant::isPlatformAdmin()) unset($nav['platform']);
     if(!Tenant::isPlatformAdmin()) unset($nav['settings']);
     ?><!doctype html><html lang="fa" dir="rtl"><head>
     <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
     <title><?=h($title)?> - Accounting CRM</title>
-    <link rel="stylesheet" href="assets/style.css?v=4.1"><link rel="stylesheet" href="assets/v4.css?v=4.3"><link rel="stylesheet" href="assets/choices.css?v=4.3">
+    <link rel="stylesheet" href="assets/style.css?v=5.0"><link rel="stylesheet" href="assets/v4.css?v=5.0"><link rel="stylesheet" href="assets/choices.css?v=5.0"><link rel="stylesheet" href="assets/v5.css?v=5.0">
     </head><body><div class="app">
     <aside class="sidebar compact"><div class="brand">Accounting CRM<span>سامانه سبک حسابداران</span></div><nav>
-    <?php foreach($nav as $k=>$v): ?><a class="<?=($_GET['page']??'dashboard')===$k?'active':''?>" href="index.php?page=<?=$k?>"><?=h($v)?></a><?php endforeach; ?>
+    <?php foreach($nav as $k=>$v): ?><?php if(isset($navGroups[$k])):?><span class="v5-nav-group"><?=h($navGroups[$k])?></span><?php endif;?><a class="<?=($_GET['page']??'dashboard')===$k?'active':''?>" href="index.php?page=<?=$k?>"><?=h($v)?></a><?php endforeach; ?>
     </nav></aside>
     <main class="main"><header class="topbar"><div><h1><?=h($title)?></h1><?php if($subtitle): ?><p><?=h($subtitle)?></p><?php endif; ?></div>
     <div class="top-actions"><a class="btn tiny" href="index.php?page=dashboard">امروز: <?=h(Jalali::today())?></a>
     <form method="post" class="inline-form"><?=csrf_field()?><input type="hidden" name="action" value="logout"><button class="btn tiny" type="submit">خروج</button></form></div></header>
     <?php foreach(flashes() as $f): ?><div class="alert <?=h($f['type'])?>"><?=h($f['msg'])?></div><?php endforeach; ?><?php
 }
-function render_footer(): void { ?></main></div><script>window.CSRF='<?=h(csrf_token())?>';window.JALALI_TODAY='<?=h(Jalali::today())?>';window.V4_WORKSPACE_ID=<?=Tenant::id()?>;window.V4_WORKSPACES=<?=json_encode(Tenant::workspaceOptions(),JSON_UNESCAPED_UNICODE|JSON_HEX_TAG|JSON_HEX_AMP)?>;</script><script src="assets/app.js?v=4.1"></script><script src="assets/v4.js?v=4.3"></script></body></html><?php }
+function render_footer(): void { ?></main></div><script>window.CSRF='<?=h(csrf_token())?>';window.JALALI_TODAY='<?=h(Jalali::today())?>';window.V4_WORKSPACE_ID=<?=Tenant::id()?>;window.V4_WORKSPACES=<?=json_encode(Tenant::workspaceOptions(),JSON_UNESCAPED_UNICODE|JSON_HEX_TAG|JSON_HEX_AMP)?>;</script><script src="assets/app.js?v=5.0"></script><script src="assets/v4.js?v=5.0"></script><script src="assets/v5.js?v=5.0"></script></body></html><?php }
 
 if ($page === 'login') { render_login(); exit; }
-Auth::require(); Tenant::boot(); V4Module::ensureSchema();
-if($_SERVER['REQUEST_METHOD']==='GET' && $page!=='login') Audit::log('page.view','page',0,$page);
+Auth::require(); // Tenant already booted by bootstrap; V5 schema is migration-gated.
+if($_SERVER['REQUEST_METHOD']==='GET' && $page!=='login' && setting('audit_page_views','0')==='1') Audit::log('page.view','page',0,$page);
 $pagePermission=['dashboard'=>'dashboard.view','companies'=>'companies.view','systems'=>'systems.view','monthly'=>'monthly.view','daily'=>'daily.view','kanban'=>'kanban.view','custom_fields'=>'custom_fields.manage',
-        'choices'=>'choices.manage','settings'=>'settings.manage'];
+        'choices'=>'choices.manage','phonebook'=>'phonebook.view','shares'=>'shares.view','performance'=>'cache.manage','settings'=>'settings.manage'];
 if(isset($pagePermission[$page])) Tenant::requirePermission($pagePermission[$page]);
 if($page==='settings' && !Tenant::isPlatformAdmin()) { http_response_code(403); throw new RuntimeException('تنظیمات زیرساخت فقط برای مدیر کل پلتفرم در دسترس است.'); }
 
@@ -447,7 +515,10 @@ elseif($page === 'daily') render_daily();
 elseif($page === 'custom_fields') render_custom_fields();
 elseif($page === 'choices') ChoiceModule::render();
 elseif($page === 'kanban') render_kanban();
-elseif($page === 'notes') V4Module::renderNotes();
+elseif($page === 'notes') V5Module::renderNotes();
+elseif($page === 'phonebook') V5Module::renderPhonebook();
+elseif($page === 'shares') V5Module::renderSharing();
+elseif($page === 'performance') V5Module::renderPerformance();
 elseif($page === 'library') V4Module::renderLibrary();
 elseif($page === 'access') V4Module::renderAccess();
 elseif($page === 'platform') V4Module::renderPlatform();
@@ -456,13 +527,13 @@ else render_calendar();
 
 function render_login(): void
 {
-    ?><!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ورود</title><link rel="stylesheet" href="assets/style.css?v=4.1"><link rel="stylesheet" href="assets/v4.css?v=4.3"><link rel="stylesheet" href="assets/choices.css?v=4.3"></head>
+    ?><!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ورود</title><link rel="stylesheet" href="assets/style.css?v=5.0"><link rel="stylesheet" href="assets/v4.css?v=5.0"><link rel="stylesheet" href="assets/choices.css?v=5.0"><link rel="stylesheet" href="assets/v5.css?v=5.0"></head>
     <body class="login-page"><main class="login-card"><h1>ورود به سامانه حسابداران</h1><p>تقویم کاری، شرکت‌ها، سامانه‌ها و برنامه‌های حسابداری</p>
     <?php foreach(flashes() as $f): ?><div class="alert <?=h($f['type'])?>"><?=h($f['msg'])?></div><?php endforeach; ?>
     <form method="post" class="grid-form autosave" data-form-key="login"><?=csrf_field()?><input type="hidden" name="action" value="login">
     <label>ایمیل<input type="email" name="email" required></label><label>رمز عبور<input type="password" name="password" required></label>
     <button class="btn primary" type="submit">ورود</button><a class="btn google" href="index.php?page=google_start">ورود یا ثبت‌نام با گوگل</a></form></main>
-    <script src="assets/app.js?v=4.1"></script><script src="assets/v4.js?v=4.3"></script></body></html><?php
+    <script src="assets/app.js?v=5.0"></script><script src="assets/v4.js?v=5.0"></script><script src="assets/v5.js?v=5.0"></script></body></html><?php
 }
 function render_calendar(): void
 {

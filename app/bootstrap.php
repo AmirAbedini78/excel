@@ -13,6 +13,7 @@ date_default_timezone_set($CONFIG['timezone'] ?? 'Asia/Tehran');
 require_once APP_ROOT . '/app/Core/DB.php';
 require_once APP_ROOT . '/app/Core/Jalali.php';
 require_once APP_ROOT . '/app/Core/Helpers.php';
+require_once APP_ROOT . '/app/Core/RuntimeCache.php';
 require_once APP_ROOT . '/app/Core/Auth.php';
 require_once APP_ROOT . '/app/Core/Schema.php';
 require_once APP_ROOT . '/app/Core/Notify.php';
@@ -20,6 +21,32 @@ require_once APP_ROOT . '/app/Core/Tenant.php';
 require_once APP_ROOT . '/app/Core/ChoiceRegistry.php';
 require_once APP_ROOT . '/app/Core/Audit.php';
 require_once APP_ROOT . '/app/Core/FileLibrary.php';
+require_once APP_ROOT . '/app/Core/Sharing.php';
+require_once APP_ROOT . '/app/Core/V5Schema.php';
 require_once APP_ROOT . '/app/Core/Xlsx.php';
-if (file_exists($configFile)) DB::connect($CONFIG['db']);
-if (file_exists($configFile)) { Tenant::ensureSchema(); ChoiceRegistry::ensureSchema(); if (Auth::check()) { Tenant::boot(); if (empty($_SESSION['_v4_login_audited'])) { Audit::log('auth.login','users',(int)Auth::user()['id'],'ورود کاربر'); $_SESSION['_v4_login_audited']=1; } } }
+
+if (file_exists($configFile)) {
+    DB::connect($CONFIG['db']);
+    RuntimeCache::boot(APP_ROOT . '/storage/cache', $CONFIG['db'] ?? []);
+
+    // V5 Fast Schema Gate:
+    // Heavy CREATE/ALTER/INFORMATION_SCHEMA work runs only once per DB + app schema version,
+    // not on every request.
+    if (!RuntimeCache::schemaReady(RuntimeCache::SCHEMA_VERSION)) {
+        Schema::migrate(pdo());
+        Tenant::ensureSchema();
+        ChoiceRegistry::ensureSchema();
+        Audit::ensureSchema();
+        FileLibrary::ensureSchema();
+        V5Schema::migrate(pdo());
+        RuntimeCache::markSchema(RuntimeCache::SCHEMA_VERSION);
+    }
+
+    if (Auth::check()) {
+        Tenant::boot();
+        if (empty($_SESSION['_v4_login_audited'])) {
+            Audit::log('auth.login','users',(int)Auth::user()['id'],'ورود کاربر');
+            $_SESSION['_v4_login_audited']=1;
+        }
+    }
+}
