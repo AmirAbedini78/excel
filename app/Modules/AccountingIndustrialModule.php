@@ -4,7 +4,7 @@ final class AccountingIndustrialModule
     private static array $sections=[
         'overview'=>'داشبورد','profile'=>'مشخصات شرکت','master'=>'اطلاعات پایه','accounts'=>'کدینگ حساب‌ها',
         'purchase'=>'خرید','vouchers'=>'اسناد حسابداری','production'=>'حسابداری صنعتی','treasury'=>'خزانه‌داری',
-        'reports'=>'گزارش‌ها','roadmap'=>'پوشش فایل مبنا','settings'=>'تنظیمات ماژول',
+        'reports'=>'گزارش‌ها','settings'=>'تنظیمات ماژول',
     ];
 
     public static function handle(string $action): void
@@ -33,10 +33,10 @@ final class AccountingIndustrialModule
     {
         Tenant::requirePermission('accounting.view');
         $cid=AccountingRepository::companyId();
-        render_header('ماژول حسابداری صنعتی','هسته مالی، خرید، خزانه‌داری، تولید و بهای تمام‌شده؛ شرکت‌ها از ماژول مدیریت امور حسابداران به‌اشتراک گذاشته می‌شوند.');
+        render_header('حسابداری صنعتی','');
         self::companyBar();
         if(!$cid){
-            echo '<section class="card acc-empty"><h2>ابتدا یک شرکت تعریف کنید</h2><p>این ماژول از همان شرکت‌های ثبت‌شده در «ماژول مدیریت امور حسابداران» استفاده می‌کند.</p><a class="btn primary" href="index.php?page=companies">تعریف شرکت</a></section>';
+            echo '<section class="card acc-empty"><h2>شرکتی برای عملیات حسابداری تعریف نشده است</h2><a class="btn primary" href="index.php?page=companies">تعریف شرکت</a></section>';
             render_footer();return;
         }
         self::tabs();
@@ -44,20 +44,28 @@ final class AccountingIndustrialModule
         match($s){
             'profile'=>self::profile(),'master'=>self::master(),'accounts'=>self::accounts(),'purchase'=>self::purchase(),
             'vouchers'=>self::vouchers(),'production'=>self::production(),'treasury'=>self::treasury(),
-            'reports'=>self::reports(),'roadmap'=>self::roadmap(),'settings'=>self::settings(),default=>self::overview(),
+            'reports'=>self::reports(),'settings'=>self::settings(),default=>self::overview(),
         };
         render_footer();
     }
 
     private static function companyBar(): void
     {
-        $companies=AccountingRepository::companies();$current=AccountingRepository::companyId();
-        echo '<section class="card acc-company-bar"><div><strong>شرکت فعال حسابداری</strong><small>تمام داده‌های مالی با Workspace و شرکت انتخاب‌شده ایزوله می‌شوند.</small></div>';
-        echo '<form method="post" class="acc-inline">'.csrf_field().'<input type="hidden" name="action" value="acc_select_company"><input type="hidden" name="section" value="'.h((string)($_GET['section']??'overview')).'"><select name="company_id" onchange="this.form.submit()">';
-        foreach($companies as $c)echo '<option value="'.(int)$c['id'].'" '.((int)$c['id']===$current?'selected':'').'>'.h($c['name']).'</option>';
+        $companies=AccountingRepository::companies();
+        $current=AccountingRepository::companyId();
+
+        echo '<section class="card acc-company-bar"><div><strong>شرکت فعال</strong></div>';
+        echo '<form method="post" class="acc-inline">'.csrf_field().
+            '<input type="hidden" name="action" value="acc_select_company">'.
+            '<input type="hidden" name="section" value="'.h((string)($_GET['section']??'overview')).'">'.
+            '<select name="company_id" onchange="this.form.submit()">';
+
+        foreach($companies as $c){
+            echo '<option value="'.(int)$c['id'].'" '.((int)$c['id']===$current?'selected':'').'>'.h($c['name']).'</option>';
+        }
+
         echo '</select></form></section>';
     }
-
     private static function tabs(): void
     {
         $s=(string)($_GET['section']??'overview');echo '<nav class="acc-tabs">';
@@ -74,7 +82,9 @@ final class AccountingIndustrialModule
 
     private static function overview(): void
     {
-        $cid=AccountingRepository::companyId();$wid=Tenant::id();
+        $cid=AccountingRepository::companyId();
+        $wid=Tenant::id();
+
         $metrics=[
             'کالا/خدمت'=>self::scalar("SELECT COUNT(*) FROM acc_items WHERE workspace_id=? AND company_id=? AND active=1",[$wid,$cid]),
             'طرف حساب'=>self::scalar("SELECT COUNT(*) FROM acc_parties WHERE workspace_id=? AND company_id=? AND active=1",[$wid,$cid]),
@@ -82,18 +92,73 @@ final class AccountingIndustrialModule
             'اسناد حسابداری'=>self::scalar("SELECT COUNT(*) FROM acc_vouchers WHERE workspace_id=? AND company_id=?",[$wid,$cid]),
             'دستور تولید'=>self::scalar("SELECT COUNT(*) FROM acc_production_orders WHERE workspace_id=? AND company_id=?",[$wid,$cid]),
         ];
-        echo '<section class="acc-metrics">';foreach($metrics as $k=>$v)echo '<article class="card"><strong>'.number_format($v).'</strong><span>'.h($k).'</span></article>';echo '</section>';
-        echo '<section class="acc-grid2"><article class="card"><h2>معماری یکپارچه</h2><p>شرکت، Workspace، کاربر و فایل دوباره تعریف نشده‌اند. زیرسیستم مالی روی موجودیت‌های مشترک پلتفرم سوار شده و تمام جداول عملیاتی کلیدهای <code>workspace_id + company_id</code> دارند.</p><div class="acc-flow"><b>شرکت</b><i>→</i><b>اطلاعات پایه</b><i>→</i><b>خرید/خزانه</b><i>→</i><b>سند مالی</b><i>→</i><b>بهای تمام‌شده</b></div></article>';
-        echo '<article class="card"><h2>پوشش نسخه ۶</h2><ul class="acc-checklist"><li>مشخصات مالیاتی و سامانه مودیان</li><li>کدینگ حساب، طرف حساب، مرکز هزینه، پروژه، واحد، انبار و کالا</li><li>پیش‌فاکتور، قرارداد، سفارش، فاکتور و برگشت خرید کالا/خدمات</li><li>سند حسابداری دوطرفه و کنترل بالانس</li><li>BOM، تولید چندمرحله‌ای، ضایعات و اجزای بهای تمام‌شده</li><li>بانک/صندوق و چک</li><li>تنظیمات استخراج‌شده از Excel</li></ul></article></section>';
-        echo '<section class="card acc-note"><b>فازهای بعدی روی همین هسته:</b> فروش کامل، انبار عملیاتی و کاردکس، ثبت خودکار اسناد، MRP، تخصیص سربار با محرک هزینه، دارایی ثابت، حقوق و دستمزد، پیمانکاری و ارسال واقعی صورتحساب سامانه مودیان.</section>';
-    }
 
+        echo '<section class="acc-metrics">';
+        foreach($metrics as $k=>$v){
+            echo '<article class="card"><strong>'.number_format($v).'</strong><span>'.h($k).'</span></article>';
+        }
+        echo '</section>';
+
+        echo '<section class="card">';
+        echo '<div class="section-title"><h2>عملیات سریع</h2></div>';
+        echo '<div class="acc-quick-actions">';
+
+        if(Tenant::can('accounting.master.manage')){
+            echo '<a class="btn" href="index.php?page=industrial&section=master&entity=items">کالا و خدمات</a>';
+            echo '<a class="btn" href="index.php?page=industrial&section=master&entity=parties">طرف حساب‌ها</a>';
+            echo '<a class="btn" href="index.php?page=industrial&section=accounts">کدینگ حساب‌ها</a>';
+        }
+        if(Tenant::can('accounting.purchase.manage')){
+            echo '<a class="btn primary" href="index.php?page=industrial&section=purchase">ثبت سند خرید</a>';
+        }
+        if(Tenant::can('accounting.vouchers.manage')){
+            echo '<a class="btn primary" href="index.php?page=industrial&section=vouchers">ثبت سند حسابداری</a>';
+        }
+        if(Tenant::can('accounting.production.manage')){
+            echo '<a class="btn" href="index.php?page=industrial&section=production">عملیات تولید</a>';
+        }
+        if(Tenant::can('accounting.treasury.manage')){
+            echo '<a class="btn" href="index.php?page=industrial&section=treasury">خزانه‌داری</a>';
+        }
+
+        echo '</div></section>';
+
+        $recent=pdo()->prepare(
+            "SELECT d.id,d.document_no,d.document_date,d.net_total,p.name party_name
+             FROM acc_purchase_docs d
+             LEFT JOIN acc_parties p ON p.id=d.party_id
+             WHERE d.workspace_id=? AND d.company_id=?
+             ORDER BY d.document_date DESC,d.id DESC
+             LIMIT 8"
+        );
+        $recent->execute([$wid,$cid]);
+        $rows=$recent->fetchAll();
+
+        echo '<section class="card table-card">';
+        echo '<div class="section-title"><h2>آخرین اسناد خرید</h2><a class="btn tiny" href="index.php?page=industrial&section=purchase">مشاهده همه</a></div>';
+        echo '<div class="table-wrap"><table><thead><tr><th>شماره</th><th>تاریخ</th><th>طرف حساب</th><th>مبلغ</th></tr></thead><tbody>';
+
+        foreach($rows as $r){
+            echo '<tr>'.
+                '<td><a href="index.php?page=industrial&section=purchase&view='.(int)$r['id'].'">'.h($r['document_no']).'</a></td>'.
+                '<td>'.h(AccountingRepository::faDate($r['document_date'])).'</td>'.
+                '<td>'.h($r['party_name']??'—').'</td>'.
+                '<td>'.number_format((float)$r['net_total']).'</td>'.
+                '</tr>';
+        }
+
+        if(!$rows){
+            echo '<tr><td colspan="4" class="muted">سندی ثبت نشده است.</td></tr>';
+        }
+
+        echo '</tbody></table></div></section>';
+    }
     private static function profile(): void
     {
         $c=AccountingRepository::company();$cid=(int)$c['id'];
         $st=pdo()->prepare("SELECT * FROM acc_company_profiles WHERE workspace_id=? AND company_id=? LIMIT 1");
         $st->execute([Tenant::id(),$cid]);$p=$st->fetch()?:[];
-        echo '<section class="card"><div class="section-title"><div><h2>مشخصات شرکت و پرونده مالیاتی</h2><div class="muted">اطلاعات عمومی از شرکت اصلی خوانده می‌شود؛ اطلاعات تخصصی مالی در پروفایل این ماژول ذخیره می‌شود.</div></div><a class="btn tiny" href="index.php?page=companies">ویرایش اطلاعات عمومی</a></div>';
+        echo '<section class="card"><div class="section-title"><h2>مشخصات شرکت و پرونده مالیاتی</h2><a class="btn tiny" href="index.php?page=companies">ویرایش مشخصات شرکت</a></div>';
         echo '<div class="acc-profile-summary"><span>نام: <b>'.h($c['name']).'</b></span><span>شناسه ملی: <b>'.h($c['national_id']??'—').'</b></span><span>کد اقتصادی: <b>'.h($c['economic_code']??'—').'</b></span><span>شماره ثبت: <b>'.h($c['registration_number']??'—').'</b></span></div>';
         if(Tenant::can('accounting.master.manage')){
             echo '<form method="post" class="grid-form acc-form">'.csrf_field().'<input type="hidden" name="action" value="acc_save_profile">';
@@ -167,7 +232,7 @@ final class AccountingIndustrialModule
             self::input('nature','ماهیت','','select',['debit'=>'بدهکار','credit'=>'بستانکار','both'=>'دو ماهیت']);self::input('account_type','نوع حساب','','select',['asset'=>'دارایی','liability'=>'بدهی','equity'=>'حقوق مالکانه','revenue'=>'درآمد','expense'=>'هزینه','contra'=>'کاهنده']);echo '<button class="btn primary">ذخیره حساب</button></form></details></section>';
         }
         $st=pdo()->prepare("SELECT a.*,p.code parent_code,p.name parent_name FROM acc_accounts a LEFT JOIN acc_accounts p ON p.id=a.parent_id WHERE a.workspace_id=? AND a.company_id=? AND a.active=1 ORDER BY a.code");$st->execute([Tenant::id(),AccountingRepository::companyId()]);
-        echo '<section class="card table-card"><div class="section-title"><h2>درخت کدینگ حساب‌ها</h2><span class="muted">سطوح کل / معین / تفصیلی با ساختار Parent قابل توسعه‌اند.</span></div><div class="table-wrap"><table><thead><tr><th>کد</th><th>نام</th><th>والد</th><th>ماهیت</th><th>نوع</th></tr></thead><tbody>';
+        echo '<section class="card table-card"><div class="section-title"><h2>کدینگ حساب‌ها</h2></div><div class="table-wrap"><table><thead><tr><th>کد</th><th>نام</th><th>والد</th><th>ماهیت</th><th>نوع</th></tr></thead><tbody>';
         foreach($st->fetchAll() as $r)echo '<tr><td>'.h($r['code']).'</td><td>'.h($r['name']).'</td><td>'.h(trim(($r['parent_code']??'').' '.($r['parent_name']??''))).'</td><td>'.h($r['nature']).'</td><td>'.h($r['account_type']).'</td></tr>';echo '</tbody></table></div></section>';
     }
 
@@ -221,7 +286,7 @@ final class AccountingIndustrialModule
     {
         Tenant::requirePermission('accounting.vouchers.view');if(Tenant::can('accounting.vouchers.manage'))self::voucherForm();
         $st=pdo()->prepare("SELECT * FROM acc_vouchers WHERE workspace_id=? AND company_id=? ORDER BY voucher_date DESC,id DESC LIMIT 300");$st->execute([Tenant::id(),AccountingRepository::companyId()]);
-        echo '<section class="card table-card"><div class="section-title"><h2>اسناد حسابداری</h2><span class="muted">ثبت دوطرفه و کنترل بالانس</span></div><div class="table-wrap"><table><thead><tr><th>شماره</th><th>تاریخ</th><th>نوع</th><th>شرح</th><th>بدهکار</th><th>بستانکار</th><th>وضعیت</th><th></th></tr></thead><tbody>';
+        echo '<section class="card table-card"><div class="section-title"><h2>اسناد حسابداری</h2></div><div class="table-wrap"><table><thead><tr><th>شماره</th><th>تاریخ</th><th>نوع</th><th>شرح</th><th>بدهکار</th><th>بستانکار</th><th>وضعیت</th><th></th></tr></thead><tbody>';
         foreach($st->fetchAll() as $r){echo '<tr><td>'.h($r['voucher_no']).'</td><td>'.h(AccountingRepository::faDate($r['voucher_date'])).'</td><td>'.h($r['voucher_type']).'</td><td>'.h($r['description']).'</td><td>'.number_format((float)$r['total_debit']).'</td><td>'.number_format((float)$r['total_credit']).'</td><td>'.h($r['status']).'</td><td>';
             if(Tenant::can('accounting.vouchers.manage'))echo '<form method="post" class="inline-form" onsubmit="return confirm(\'سند حذف شود؟\')">'.csrf_field().'<input type="hidden" name="action" value="acc_delete_voucher"><input type="hidden" name="id" value="'.(int)$r['id'].'"><button class="btn tiny danger">حذف</button></form>';echo '</td></tr>';}
         echo '</tbody></table></div></section>';
@@ -281,71 +346,127 @@ final class AccountingIndustrialModule
 
     private static function reports(): void
     {
-        Tenant::requirePermission('accounting.reports.view');$cid=AccountingRepository::companyId();$wid=Tenant::id();
+        Tenant::requirePermission('accounting.reports.view');
+
+        $cid=AccountingRepository::companyId();
+        $wid=Tenant::id();
+
         echo '<section class="acc-grid2"><article class="card"><h2>تراز آزمایشی</h2>';
-        $st=pdo()->prepare("SELECT a.code,a.name,COALESCE(SUM(l.debit),0) debit,COALESCE(SUM(l.credit),0) credit FROM acc_accounts a
-            LEFT JOIN acc_voucher_lines l ON l.account_id=a.id AND l.workspace_id=a.workspace_id
-            LEFT JOIN acc_vouchers v ON v.id=l.voucher_id AND v.workspace_id=a.workspace_id AND v.company_id=a.company_id
-            WHERE a.workspace_id=? AND a.company_id=? AND a.active=1 GROUP BY a.id,a.code,a.name ORDER BY a.code LIMIT 500");$st->execute([$wid,$cid]);
+
+        $st=pdo()->prepare(
+            "SELECT a.code,a.name,
+                    COALESCE(SUM(l.debit),0) debit,
+                    COALESCE(SUM(l.credit),0) credit
+             FROM acc_accounts a
+             LEFT JOIN acc_voucher_lines l
+               ON l.account_id=a.id AND l.workspace_id=a.workspace_id
+             LEFT JOIN acc_vouchers v
+               ON v.id=l.voucher_id
+              AND v.workspace_id=a.workspace_id
+              AND v.company_id=a.company_id
+             WHERE a.workspace_id=? AND a.company_id=? AND a.active=1
+             GROUP BY a.id,a.code,a.name
+             ORDER BY a.code
+             LIMIT 500"
+        );
+        $st->execute([$wid,$cid]);
+
         echo '<div class="table-wrap"><table><thead><tr><th>کد</th><th>حساب</th><th>بدهکار</th><th>بستانکار</th><th>مانده</th></tr></thead><tbody>';
-        foreach($st->fetchAll() as $r){$bal=(float)$r['debit']-(float)$r['credit'];echo '<tr><td>'.h($r['code']).'</td><td>'.h($r['name']).'</td><td>'.number_format((float)$r['debit']).'</td><td>'.number_format((float)$r['credit']).'</td><td>'.number_format($bal).'</td></tr>';}echo '</tbody></table></div></article>';
-        echo '<article class="card"><h2>خرید به تفکیک طرف حساب</h2>';$st=pdo()->prepare("SELECT p.name,COUNT(d.id) doc_count,COALESCE(SUM(d.net_total),0) total FROM acc_purchase_docs d LEFT JOIN acc_parties p ON p.id=d.party_id WHERE d.workspace_id=? AND d.company_id=? GROUP BY d.party_id,p.name ORDER BY total DESC LIMIT 50");$st->execute([$wid,$cid]);
-        foreach($st->fetchAll() as $r)echo '<div class="acc-list-row"><span>'.h($r['name']?:'بدون طرف حساب').'</span><small>'.number_format((float)$r['total']).' • '.(int)$r['doc_count'].' سند</small></div>';echo '</article></section>';
-        echo '<section class="card"><h2>گزارش‌ساز و داشبورد مدیریتی</h2><p>ساختار گزارش‌های عددی و نموداری Excel در این نسخه به‌صورت Report Foundation پیاده شده است. گزارش‌ساز Drag & Drop، صورت‌های مالی رسمی و گزارش‌های قانونی در فاز بعدی روی همین مدل داده توسعه پیدا می‌کنند.</p></section>';
+
+        foreach($st->fetchAll() as $r){
+            $bal=(float)$r['debit']-(float)$r['credit'];
+            echo '<tr>'.
+                '<td>'.h($r['code']).'</td>'.
+                '<td>'.h($r['name']).'</td>'.
+                '<td>'.number_format((float)$r['debit']).'</td>'.
+                '<td>'.number_format((float)$r['credit']).'</td>'.
+                '<td>'.number_format($bal).'</td>'.
+                '</tr>';
+        }
+
+        echo '</tbody></table></div></article>';
+
+        echo '<article class="card"><h2>خرید به تفکیک طرف حساب</h2>';
+
+        $st=pdo()->prepare(
+            "SELECT p.name,COUNT(d.id) doc_count,COALESCE(SUM(d.net_total),0) total
+             FROM acc_purchase_docs d
+             LEFT JOIN acc_parties p ON p.id=d.party_id
+             WHERE d.workspace_id=? AND d.company_id=?
+             GROUP BY d.party_id,p.name
+             ORDER BY total DESC
+             LIMIT 50"
+        );
+        $st->execute([$wid,$cid]);
+
+        foreach($st->fetchAll() as $r){
+            echo '<div class="acc-list-row">'.
+                '<span>'.h($r['name']?:'بدون طرف حساب').'</span>'.
+                '<small>'.number_format((float)$r['total']).' • '.(int)$r['doc_count'].' سند</small>'.
+                '</div>';
+        }
+
+        echo '</article></section>';
     }
-
-    private static function roadmap(): void
-    {
-        $rows=[
-            ['فایل ۱ / اطلاعات پایه-تعاریف','بدون داده','شیت در فایل پیوست خالی است.'],
-            ['فایل ۱ / اطلاعات پایه.مشخصات شرکت','پیاده شده','پروفایل شرکت، نوع فعالیت، اطلاعات پرونده مالیاتی، پروانه کسب، اطلاعات تماس و فیلدهای سامانه مودیان.'],
-            ['فایل ۱ / اطلاعات پایه-دسترسی کاربران','یکپارچه با هسته','به‌جای ساخت سیستم کاربر موازی، روی RBAC موجود و Permissionهای accounting.* نگاشت شده است.'],
-            ['فایل ۱ / ماژول خزانه داری','هسته فعال','بانک/صندوق، چک دریافتنی/پرداختنی؛ تقسیط و وام برای فاز تکمیلی رزرو شده است.'],
-            ['فایل ۱ / ماژول حسابداری','هسته فعال','مرکز هزینه، سال مالی، سند دوطرفه، تراز آزمایشی، پایه گزارش عددی/مدیریتی.'],
-            ['فایل ۱ / ماژول خرید','هسته فعال','۱۰ نوع سند خرید کالا/خدمات، Header/Line، طرف حساب، مرکز هزینه، پروژه، انبار، وضعیت گردش و مودیان.'],
-            ['فایل ۱ / تنظیمات','پیاده شده','تنظیمات عمومی، خرید، انبار، فروش، حقوق، مالیات، خزانه‌داری و حسابداری در Registry تنظیمات ماژول.'],
-            ['فایل ۱ / Sheet2','نقشه توسعه','خرید، فروش، باشگاه مشتریان، ویزیتور، خزانه، انبار، دارایی ثابت، حقوق، حسابداری، اطلاعات پایه، مودیان، پیمانکاری و تولید در نقشه معماری لحاظ شده‌اند.'],
-            ['فایل ۱ / گزارش','متادیتای منبع','تاریخ‌های ثبت‌شده به‌عنوان تاریخچه طراحی فایل مبنا تلقی شده‌اند و داده عملیاتی مالی ساخته نشده است.'],
-            ['فایل ۲ / اطلاعات پایه-مشخصات شرکت','ادغام شده','نسخه اولیه همان نیازها در پروفایل مالی و Companies فعلی ادغام شده است.'],
-            ['فایل ۲ / اطلاعات پایه-دسترسی کاربران','ادغام شده','نام/رمز/دسترسی به RBAC و Users موجود واگذار شده است.'],
-            ['فایل ۲ / Sheet2','نقشه توسعه','خرید، فروش، خزانه، حسابداری، حقوق، دارایی ثابت، تولید، انبارداری، مودیان، باشگاه مشتریان و پیمانکاری.'],
-        ];
-        echo '<section class="card"><div class="section-title"><div><h2>پوشش شیت‌های فایل مبنا</h2><div class="muted">برای اینکه هیچ شیت یا نیاز اولیه‌ای گم نشود، وضعیت هر بخش تا زمان یکپارچه‌سازی نهایی نگهداری می‌شود.</div></div></div><div class="table-wrap"><table><thead><tr><th>شیت / منبع</th><th>وضعیت</th><th>نگاشت در پلتفرم</th></tr></thead><tbody>';
-        foreach($rows as $r)echo '<tr><td>'.h($r[0]).'</td><td><span class="badge">'.h($r[1]).'</span></td><td>'.h($r[2]).'</td></tr>';
-        echo '</tbody></table></div></section>';
-
-        $modules=[
-            ['خرید','فعال','Purchase Engine کالا/خدمات'],
-            ['فروش','رزرو فاز بعد','تنظیمات و مدل ارتباطی آماده؛ موتور فروش مستقل در فاز بعد'],
-            ['خزانه‌داری','هسته فعال','بانک/صندوق/چک'],
-            ['انبار','مدل پایه','انبار و کالا فعال؛ رسید/حواله/کاردکس کامل در فاز بعد'],
-            ['دارایی ثابت / اموال','رزرو فاز بعد','ماژول مستقل با اتصال به سند حسابداری'],
-            ['حقوق و دستمزد','رزرو فاز بعد','تنظیم مرکز هزینه/پروژه از Excel ثبت شده'],
-            ['حسابداری','فعال','کدینگ، سند، سال مالی، گزارش'],
-            ['مودیان','پروفایل آماده','شناسه حافظه/کلیدها/وضعیت‌ها؛ ارسال API در فاز بعد'],
-            ['تولید','هسته فعال','BOM، چندمرحله‌ای، ضایعات، دستور تولید و بهای واقعی'],
-            ['پیمانکاری','رزرو فاز بعد','پروژه و مرکز هزینه پایه مشترک'],
-            ['باشگاه مشتریان','رزرو فاز بعد','به Customer/Party Layer متصل خواهد شد'],
-            ['ویزیتور','پایه در خرید','درصد کمیسیون در ردیف سند رزرو شده؛ ماژول فروش تکمیل می‌کند'],
-        ];
-        echo '<section class="card"><h2>نقشه زیرسیستم‌های حسابداری</h2><div class="acc-roadmap-grid">';
-        foreach($modules as $m)echo '<article><b>'.h($m[0]).'</b><span>'.h($m[1]).'</span><small>'.h($m[2]).'</small></article>';
-        echo '</div></section>';
-    }
-
     private static function settings(): void
     {
-        Tenant::requirePermission('accounting.settings.manage');$section=(string)($_GET['settings_section']??'accounting');$titles=['general'=>'عمومی','purchase'=>'خرید','inventory'=>'انبار','sales'=>'فروش','payroll'=>'حقوق و دستمزد','tax'=>'مالیاتی/مودیان','treasury'=>'خزانه‌داری','accounting'=>'حسابداری'];if(!isset($titles[$section]))$section='accounting';
-        echo '<div class="acc-subtabs">';foreach($titles as $k=>$v)echo '<a class="'.($section===$k?'active':'').'" href="index.php?page=industrial&section=settings&settings_section='.$k.'">'.h($v).'</a>';echo '</div><section class="card"><div class="section-title"><div><h2>تنظیمات '.h($titles[$section]).'</h2><div class="muted">این تنظیمات فعلاً جدا هستند تا بعداً به Settings مرکزی پلتفرم Merge شوند.</div></div></div>';
-        echo '<form method="post" class="acc-settings-form">'.csrf_field().'<input type="hidden" name="action" value="acc_save_settings"><input type="hidden" name="settings_section" value="'.h($section).'"><div class="acc-settings-grid">';
-        foreach(AccountingRepository::settings($section) as $s){$opts=$s['options_json']?json_decode($s['options_json'],true):null;echo '<label class="acc-setting"><span>'.h($s['label']).'</span><small>'.h($s['source_note']).'</small>';
-            if($s['control_type']==='bool')echo '<select name="settings['.h($s['setting_key']).']"><option value="1" '.($s['value_text']==='1'?'selected':'').'>بله</option><option value="0" '.($s['value_text']!=='1'?'selected':'').'>خیر</option></select>';
-            elseif($s['control_type']==='select'){echo '<select name="settings['.h($s['setting_key']).']">';foreach((array)$opts as $v=>$t)echo '<option value="'.h($v).'" '.((string)$s['value_text']===(string)$v?'selected':'').'>'.h($t).'</option>';echo '</select>';}
-            else echo '<input type="'.($s['control_type']==='number'?'number':'text').'" name="settings['.h($s['setting_key']).']" value="'.h($s['value_text']).'">';echo '</label>';
-        }
-        echo '</div><button class="btn primary">ذخیره تنظیمات ماژول</button></form></section>';
-    }
+        Tenant::requirePermission('accounting.settings.manage');
 
+        $section=(string)($_GET['settings_section']??'accounting');
+        $titles=[
+            'general'=>'عمومی',
+            'purchase'=>'خرید',
+            'inventory'=>'انبار',
+            'sales'=>'فروش',
+            'payroll'=>'حقوق و دستمزد',
+            'tax'=>'مالیاتی/مودیان',
+            'treasury'=>'خزانه‌داری',
+            'accounting'=>'حسابداری'
+        ];
+
+        if(!isset($titles[$section]))$section='accounting';
+
+        echo '<div class="acc-subtabs">';
+        foreach($titles as $k=>$v){
+            echo '<a class="'.($section===$k?'active':'').'" href="index.php?page=industrial&section=settings&settings_section='.$k.'">'.h($v).'</a>';
+        }
+        echo '</div>';
+
+        echo '<section class="card">';
+        echo '<div class="section-title"><h2>تنظیمات '.h($titles[$section]).'</h2></div>';
+
+        echo '<form method="post" class="acc-settings-form">'.
+            csrf_field().
+            '<input type="hidden" name="action" value="acc_save_settings">'.
+            '<input type="hidden" name="settings_section" value="'.h($section).'">'.
+            '<div class="acc-settings-grid">';
+
+        foreach(AccountingRepository::settings($section) as $s){
+            $opts=$s['options_json']?json_decode($s['options_json'],true):null;
+
+            echo '<label class="acc-setting"><span>'.h($s['label']).'</span>';
+
+            if($s['control_type']==='bool'){
+                echo '<select name="settings['.h($s['setting_key']).']">'.
+                    '<option value="1" '.($s['value_text']==='1'?'selected':'').'>بله</option>'.
+                    '<option value="0" '.($s['value_text']!=='1'?'selected':'').'>خیر</option>'.
+                    '</select>';
+            }elseif($s['control_type']==='select'){
+                echo '<select name="settings['.h($s['setting_key']).']">';
+                foreach((array)$opts as $v=>$label){
+                    echo '<option value="'.h($v).'" '.((string)$s['value_text']===(string)$v?'selected':'').'>'.h($label).'</option>';
+                }
+                echo '</select>';
+            }else{
+                echo '<input type="'.($s['control_type']==='number'?'number':'text').'" '.
+                    'name="settings['.h($s['setting_key']).']" value="'.h($s['value_text']).'">';
+            }
+
+            echo '</label>';
+        }
+
+        echo '</div><button class="btn primary">ذخیره تنظیمات</button></form></section>';
+    }
     private static function saveProfile(): void
     {
         Tenant::requirePermission('accounting.master.manage');$cid=AccountingRepository::companyId();if(!$cid)throw new RuntimeException('شرکت فعال انتخاب نشده است.');
